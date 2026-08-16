@@ -8,8 +8,8 @@ command that produces it for all four companies at once.
 """
 from __future__ import annotations
 
-from . import workbook, direct, methodology
-from .forecast import company_spec, _companies_json
+from . import methodology, selection, workbook
+from .forecast import _companies_json, company_spec
 
 TICKERS = ["HD", "ADI", "HAS", "DE"]
 
@@ -41,13 +41,13 @@ def output_spec() -> dict:
     }
 
 
-def run_pipeline(write: bool = False) -> dict:
-    """Run all four companies through the one pipeline (Methodology 1, direct output).
+def run_pipeline(write: bool = False, selection_mode: str = selection.GUARDED_NESTED_MODE) -> dict:
+    """Run all four companies through the guarded Methodology 1 pipeline.
     Returns a manifest; if write=True also emits the workbooks to submission/."""
     companies = []
     for t in TICKERS:
         spec = company_spec(t)
-        d = direct.forecast(t)
+        d = selection.forecast(t, mode=selection_mode)
         metrics = []
         for m in spec["metrics"]:
             mm = d["metrics"].get(m["label"])
@@ -56,14 +56,18 @@ def run_pipeline(write: bool = False) -> dict:
                             "kind": mm["kind"] if mm else None,
                             "band": mm["band"] if mm else None,
                             "basis": mm["basis"] if mm else None,
-                            "sources": mm["sources"] if mm else []})
+                            "sources": mm["sources"] if mm else [],
+                            "selection": mm.get("selection") if mm else None,
+                            "direct_point": mm.get("direct_point") if mm else None})
         path = workbook.write_direct(spec["outputFile"], spec["period"], metrics) if write else None
         companies.append({"ticker": t, "company": spec["company"], "period": spec["period"],
                           "file": spec["outputFile"], "wired": bool(d["metrics"]),
                           "written": path, "metrics": metrics})
     filled = sum(1 for f in companies for m in f["metrics"] if m["point"] is not None)
     total = sum(len(f["metrics"]) for f in companies)
+    report_paths = selection.write_nested_report() if write and selection_mode != selection.DIRECT_MODE else None
     return {"companies": companies, "n_filled": filled, "n_total": total,
+            "selection_mode": selection_mode, "nested_report": report_paths,
             "wired": sum(1 for f in companies if f["wired"]),
             "ready": all(f["wired"] and all(m["point"] is not None for m in f["metrics"])
                          for f in companies)}

@@ -6,8 +6,8 @@ consistency checks; §13 never hide failures). Every number gets a verdict:
   warn  — soft issue (wide band, near a bound) — surfaced, not blocking
   fail  — hard issue (non-finite, out of range, wrong sign) — surfaced, still written but flagged
 
-This is the deferred backtesting layer's stand-in for the current direct form: not a
-rolling-origin backtest, but a deterministic control gate on the produced numbers.
+This is a deterministic control gate after guarded selection, distinct from the
+causal nested backtest that estimates forecast performance.
 """
 from __future__ import annotations
 
