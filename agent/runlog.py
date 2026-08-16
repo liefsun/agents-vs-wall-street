@@ -84,6 +84,23 @@ def _sel(m: dict):
     return src, s.get("outer_skill"), s.get("outer_origins"), (s.get("reasons") or [])
 
 
+def _reconcile_lines(company: dict) -> list[str]:
+    """Guidance-guard blends and anchorless-deviation flags applied to this company."""
+    recon = company.get("reconciliation") or []
+    if not recon:
+        return []
+    out = ["", "**Reconciliation guard** — guidance blends + anchorless flags (deterministic accuracy pass):"]
+    for r in recon:
+        if r["action"] == "guidance-guard":
+            out.append(f"- **{r['label']}**: blended toward issued guidance {_num(r['guidance'])} — "
+                       f"{_num(r['before'])} → **{_num(r['after'])}** "
+                       f"(was {r['deviation'] * 100:.0f}% off; model weight {r['model_weight']:.2f} = bounded outer skill)")
+        else:
+            out.append(f"- ⚑ **{r['label']}**: {_num(r['before'])} vs direct {_num(r.get('direct'))} "
+                       f"({r['deviation'] * 100:.0f}% apart) — {r['note']}")
+    return out
+
+
 def _provenance_lines(company: dict) -> list[str]:
     """Per-metric extraction trace for one company (docs read / admitted / rejected,
     series composition, agent-vs-parser disagreements, sample quotes). Deterministic
@@ -190,6 +207,9 @@ def build_lines(manifest: dict) -> list[str]:
             if basis:
                 row += f" Basis: {basis}"
             L.append(row)
+
+        # ── Reconciliation guard — guidance blends + anchorless flags (accuracy pass)
+        L += _reconcile_lines(c)
 
         # ── Extraction provenance — how each number's series was built (deterministic replay)
         L += _provenance_lines(c)
