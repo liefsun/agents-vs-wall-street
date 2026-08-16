@@ -1,0 +1,9 @@
+{
+  "id": "drift_short",
+  "label": "Seasonal drift · short 4-qtr lookback",
+  "plug": "hot",
+  "kind": "candidate",
+  "applies_to": ["money", "eps"],
+  "spec": { "type": "drift", "lag": 4, "lookback": 4, "mode": "mult" },
+  "note": "Research variant: react faster to recent YoY growth than the built-in drift_mult."
+}
