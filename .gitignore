@@ -17,3 +17,6 @@ outputs/
 # `agent/cache/` here would make the negation below unreachable.
 agent/cache/*
 !agent/cache/research/
+
+logs/clear-run*.md
+logs/clear-run.json

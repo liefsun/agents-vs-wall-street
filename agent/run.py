@@ -18,6 +18,8 @@ def main() -> None:
     print(f"\n{manifest['n_filled']}/{manifest['n_total']} numbers · run `npm run check:submission`")
     if manifest.get("nested_report"):
         print(f"nested report · {manifest['nested_report']['markdown']}")
+    if manifest.get("run_log"):
+        print(f"clear-run log · {manifest['run_log']['stable']}")
 
 
 if __name__ == "__main__":

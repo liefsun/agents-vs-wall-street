@@ -276,3 +276,136 @@ class Methodology:
 
 
 METHOD = Methodology()
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# Methodology 2 — independent parallel methodology (historical analogue + scenarios).
+# Kept as a self-contained block so the engine (Methodology 1) stays untouched; the
+# agent orchestration layer reads BOTH and selects per metric.
+# ══════════════════════════════════════════════════════════════════════════════════
+METHODOLOGY_2 = {
+    "id": "methodology-2",
+    "name": "Methodology 2 · Historical Analogue + Evidence-Weighted Scenarios",
+    "goal": ("For each company-period-metric, find the historical quarters whose operating STATE most "
+             "resembles today, use their realized NEXT-period outcomes to build a forecast distribution, "
+             "then reweight with guidance + calls/slides evidence into Bear/Base/Bull scenarios and a point."),
+    "recipe": ["historical-state matching", "+ forward-outcome distribution",
+               "+ evidence-weighted scenarios", "+ accounting reconciliation"],
+    "core_idea": ("Not 'what is next-quarter revenue?' but 'which past quarters looked like now, and what "
+                  "happened to revenue/margin/EPS right after them?'"),
+    "flow": ["current company state", "find historical analogue quarters",
+             "observe their next-period realized outcomes", "weight by similarity + recency",
+             "reweight with current guidance + calls/slides evidence",
+             "Bear/Base/Bull distribution", "accounting reconciliation", "output"],
+    "snapshot_features": [
+        "latest level", "YoY growth", "QoQ growth", "1-quarter momentum", "2-quarter momentum",
+        "historical volatility", "latest margin", "margin change", "guidance midpoint",
+        "guidance range width", "guidance change vs prior", "demand signal", "pricing signal",
+        "inventory signal", "management-confidence signal", "current regime", "recency",
+    ],
+    "leakage_rules": [
+        "snapshot at t uses ONLY info with published_at ≤ t",
+        "standardisation mean/std from the then-available training set only",
+        "the analogue TARGET is the next period actually reported AFTER t",
+        "no calls/slides/filings published after the target result",
+        "event-dedup multiple docs of one earnings event",
+    ],
+    "company_features": {
+        "HD": ["comparable-sales level & direction", "transaction growth", "average-ticket growth",
+               "total-sales growth", "Pro vs DIY", "gross/operating margin", "weather/housing", "M&A & store contribution"],
+        "ADI": ["revenue growth", "end-market mix (Ind/Auto/Comms)", "bookings/demand", "inventory cycle",
+                "adjusted gross margin", "adjusted operating margin", "guidance mid & width", "beat/miss history"],
+        "HAS": ["Group net-fee growth", "Temp & Contracting growth", "Permanent growth", "geography mix",
+               "consultant productivity", "headcount change", "cost savings", "conversion rate", "FX & portfolio"],
+        "DE": ["worldwide sales growth", "PPA sales & operating margin", "shipment volume", "price/mix",
+               "production cost", "dealer inventory", "segment outlook", "group net-income guidance"],
+    },
+    "parameters": {
+        "K": [3, 5, 7, 9],
+        "distance": ["Manhattan", "Euclidean"],
+        "recency_half_life": [8, 12, 20, "inf"],
+        "feature_sets": ["financial only", "financial + guidance", "financial + guidance + signals"],
+        "regime_filter": ["off", "same-regime", "adjacent-regime"],
+        "selected_via": "point-in-time rolling backtest across many origins + windows + sensitivity; "
+                        "prefer low error AND cross-window stability (avoid fragile best-on-one-window configs)",
+    },
+    "gate": [
+        "enough historical origins", "≥3 valid analogues", "analogue distances not all too large",
+        "PIT MAE/WAPE beats seasonal-naive", "stable across backtest windows",
+        "interval coverage not badly off", "passes unit + accounting-consistency checks",
+        "else → fallback to Methodology 1; if M1≈M2 → capped ensemble (neither dominates unbounded)",
+    ],
+    "signals_role": ["set current regime", "adjust feature weights", "adjust analogue weights",
+                     "adjust Bear/Base/Bull probabilities", "explain why now is (un)like the past — never set numbers"],
+    "output_schema": ["methodology", "model", "selected_k", "distance", "recency_half_life", "current_features",
+                      "analogues[origin_period, distance, weight, next_period_actual, sources]",
+                      "bear", "base", "bull", "scenario_probabilities", "point_forecast",
+                      "original_point", "reconciled_point", "confidence", "fallback_reason"],
+    "constraints": [
+        "LLM never sets the final number", "fixed random seed; same input → same output",
+        "no future leakage", "never hide fallback", "every analogue has a source + historical period",
+        "insufficient data → explicit fallback to Methodology 1", "still 12 numbers → 4 official workbooks",
+    ],
+    "point_rule": "default point = weighted median (Base scenario)",
+    "current_form": ("Live: analogue KNN on PIT financial snapshots → recency×similarity-weighted next-period "
+                     "YoY-growth distribution → Bear/Base/Bull (P20/P50/P80) applied to the seasonal anchor, "
+                     "gated vs Methodology 1 + seasonal-naive. Guidance-constraint, regime-filter, qualitative "
+                     "signal reweighting and cross-metric accounting reconciliation are specified and staged."),
+}
+
+# Methodology 2's OWNED approaches (registry) — with LaTeX
+MODEL_APPROACHES_2 = {
+    "m2_analogue_plain": {
+        "name": "Analogue · plain",
+        "desc": "Weighted distance on standardised snapshot features; take the K nearest historical quarters and use their next-period actuals.",
+        "latex": [(r"d(i,\text{now}) = \sum_f w_f\,\lvert z_{i,f} - z_{\text{now},f}\rvert", "robust (Manhattan) distance"),
+                  (r"z_{i,f} = \dfrac{x_{i,f} - \mu^{<t}_f}{\sigma^{<t}_f}", "PIT standardisation")],
+    },
+    "m2_recency_weighted": {
+        "name": "Analogue · recency-weighted",
+        "desc": "Combine similarity with time-decay so old cycles don't dominate.",
+        "latex": [(r"w_i = \underbrace{\tfrac{1}{1+d_i}}_{\text{similarity}}\times\exp\!\left(-\tfrac{\text{age}_i}{h}\right)", "similarity × recency, half-life h")],
+    },
+    "m2_regime_filtered": {
+        "name": "Analogue · regime-filtered",
+        "desc": "Classify current state (contraction / stabilisation / recovery) and only match analogues in the same or adjacent regime.",
+        "latex": [(r"\mathcal{A} = \{\,i : \text{regime}_i \in \{r_{\text{now}},\, r_{\text{now}}\pm 1\}\,\}", "regime-constrained analogue set")],
+    },
+    "m2_guidance_constrained": {
+        "name": "Analogue · guidance-constrained",
+        "desc": "Where guidance exists, let it act as a soft likelihood — down-weight analogues that conflict badly with the guide (never hard-clip the whole distribution).",
+        "latex": [(r"w_i \leftarrow w_i \cdot \exp\!\left(-\lambda\,\lvert o_i - g_{\text{mid}}\rvert / g_{\text{width}}\right)", "soft guidance likelihood")],
+    },
+    "m2_scenario_weighted": {
+        "name": "Scenario · Bear / Base / Bull",
+        "desc": "Weighted quantiles of the analogues' next-period outcomes; calls/slides adjust the three probabilities, not the numbers.",
+        "latex": [(r"\text{Bear}=Q_{0.2},\ \text{Base}=Q_{0.5},\ \text{Bull}=Q_{0.8}\ \text{(weighted)}", "scenario quantiles"),
+                  (r"\hat f = \sum_s p_s\,Q_s,\quad \sum_s p_s = 1", "evidence-weighted point")],
+    },
+    "m2_accounting_reconciled": {
+        "name": "Accounting reconciliation",
+        "desc": "Push analogue forecasts through the company bridge (revenue→margin→OP→NI→EPS); reconcile conflicts, log original/adjusted/reason.",
+        "latex": [(r"\text{Rev}\to m\to \text{OP}\to \text{NI}\to \text{EPS}", "consistency bridge")],
+    },
+}
+
+
+METHODOLOGIES = {"methodology-1": METHODOLOGY_1, "methodology-2": METHODOLOGY_2}
+
+# what INPUTS each methodology needs — the agent reasons about how to provision these
+# from the data catalog, and feature-control validates the provisioned features.
+INPUT_SPECS = {
+    "methodology-1": {
+        "needs": ["a produced point via one of: management guidance for the target period, "
+                  "a same-quarter seasonal anchor (actual series ≥ 8 quarters), or an accounting "
+                  "bridge (net income / shares, or revenue / margin)"],
+        "min_series": 0,       # M1 has stated/guidance fallbacks — almost always provisionable
+    },
+    "methodology-2": {
+        "needs": ["an actual metric series ≥ 14 quarters (to build PIT snapshots and find analogues)",
+                  "non-degenerate features (YoY-growth variance > 0)",
+                  "≥ 3 valid historical analogues"],
+        "min_series": 14,
+        "min_analogues": 3,
+    },
+}
