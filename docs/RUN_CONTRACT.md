@@ -19,7 +19,10 @@ metric.
 
 ## Current state
 
-The initial runner validates the organiser manifest and creates an auditable run
-directory. Retrieval, forecast generation and workbook writing are intentionally
-not implemented in the first commit.
+The run contract is implemented. `python -m agent.run` processes all four companies,
+applies guarded nested selection where causal outer evidence is sufficient, falls back
+to sourced direct forecasts elsewhere, writes all four workbooks and emits the nested
+evaluation report. The official workbook checker passes all four files.
 
+Runtime evaluation files live under ignored `outputs/`; the current tracked snapshot
+is [NESTED_PARAMETER_EVALUATION.md](NESTED_PARAMETER_EVALUATION.md).

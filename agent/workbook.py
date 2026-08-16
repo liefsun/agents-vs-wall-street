@@ -26,7 +26,7 @@ def _round(value: float, kind: str) -> float:
 
 
 def write_direct(output_file: str, period: str, metrics: list[dict]) -> str:
-    """Write from plain metric dicts (Methodology-1 direct output): each dict has
+    """Write from selected metric dicts (nested or direct fallback): each dict has
     label, kind and point. Fills the Summary-sheet period column, structure untouched."""
     src = os.path.join(TEMPLATES, output_file)
     wb = load_workbook(src)

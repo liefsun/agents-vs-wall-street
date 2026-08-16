@@ -1,5 +1,4 @@
-"""Parameter eval — pulled from quant-projects (garch_var `compare_models` +
-regime_signal `sensitivity_analysis`).
+"""Non-nested candidate-model diagnostic retained for UI compatibility.
 
 For each metric with a backtestable series we:
   · compare a GRID of candidate models by prequential (walk-forward) error, rank them,
@@ -8,8 +7,8 @@ For each metric with a backtestable series we:
   · run a sensitivity grid over the backtest window to see if the winner is robust or
     fragile (the `sensitivity_analysis` threshold×exposure grid analog).
 
-This is the "which model / parameter is best, and is it robust" evaluation the
-single-model backtest was missing.
+Formal parameter conclusions live in :mod:`agent.parameter_evaluation`; this module
+only screens individual model functions and must not be cited as unbiased uplift.
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ _CANDIDATES = {
 def _err(r: dict) -> float:
     if r.get("insufficient"):
         return float("inf")
-    return r["mae"] if r.get("kind") == "pct" else r["wape"]
+    return r["mae"]
 
 
 def compare(ticker: str, label: str, kind: str) -> dict:
@@ -70,28 +69,40 @@ def sensitivity(ticker: str, label: str, kind: str, model_name: str | None = Non
     if not axis:
         return None
     fn = _CANDIDATES.get(model_name)
-    saved = prequential.ORIGIN_WINDOW
     out = []
-    try:
-        for w in (12, 16, 20, 24):
-            prequential.ORIGIN_WINDOW = w
-            r = (prequential.run(axis, values, kind, model_fn=fn, model_name=model_name) if fn
-                 else prequential.run(axis, values, kind,
-                                      approach="guidance", guidance_by_key=prequential.guidance_for(ticker, label)))
-            if not r.get("insufficient"):
-                out.append({"window": w, "err": _err(r)})
-    finally:
-        prequential.ORIGIN_WINDOW = saved
+    for window in (12, 16, 20, 24):
+        r = (
+            prequential.run(
+                axis,
+                values,
+                kind,
+                model_fn=fn,
+                model_name=model_name,
+                origin_window=window,
+            )
+            if fn
+            else prequential.run(
+                axis,
+                values,
+                kind,
+                approach="guidance",
+                guidance_by_key=prequential.guidance_for(ticker, label),
+                origin_window=window,
+            )
+        )
+        if not r.get("insufficient"):
+            out.append({"window": window, "err": _err(r)})
     if not out:
         return None
     errs = [o["err"] for o in out]
     rng = max(errs) - min(errs)
+    relative_range = rng / max(min(errs), 1e-9)
     return {"grid": out, "range": rng, "min": min(errs), "max": max(errs),
-            "robust": rng < (2.0 if kind == "pct" else 0.10)}
+            "relative_range": relative_range, "robust": relative_range < 0.25}
 
 
 def compare_all() -> list[dict]:
-    from .forecast import company_spec, METRIC_MAP
+    from .forecast import METRIC_MAP, company_spec
     from .prequential import _kind_from_units
     rows = []
     for t in ("HD", "ADI", "HAS", "DE"):

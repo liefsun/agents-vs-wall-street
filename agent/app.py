@@ -10,16 +10,16 @@ Run:  uv run --with-requirements agent/requirements.txt python -m agent.app
 from __future__ import annotations
 
 import html
+import json as _json
 import os
 import time
 
 from flask import Flask, Response, redirect
+from werkzeug.exceptions import BadRequest
 
-import json as _json
-
-from .forecast import forecast_company, METRIC_MAP, company_spec
+from . import governance, methodology, output, selection, workbook
 from .corpus import FOLDER, ROOT
-from . import workbook, governance, output, methodology, direct
+from .forecast import METRIC_MAP, company_spec, forecast_company
 
 app = Flask(__name__)
 TICKERS = ["HD", "ADI", "HAS", "DE"]
@@ -114,8 +114,8 @@ def index():
         rows += (f"<div class=card><div style='display:flex;justify-content:space-between'>"
                  f"<div>{head}</div><a href='/graph?t={c['ticker']}'>graph →</a></div>{cells}</div>")
     body = (f"<h1>Agents vs Wall Street — forecasting agent</h1>"
-            f"<div class=sub><b>{methodology.METHODOLOGY_1['name']}</b> · direct output "
-            f"(backtesting deferred). {manifest['n_filled']}/{manifest['n_total']} numbers produced.</div>"
+            f"<div class=sub><b>{methodology.METHODOLOGY_1['name']}</b> · guarded nested selection "
+            f"with direct fallback. {manifest['n_filled']}/{manifest['n_total']} numbers produced.</div>"
             f"<div class=card><a href='/graph'>▶ one pipeline · four companies · output layer (graph)</a>"
             f" &nbsp;·&nbsp; <a href='/output'>output layer</a>"
             f" &nbsp;·&nbsp; <a href='/backtest'>backtest results</a>"
@@ -161,7 +161,7 @@ def company(ticker):
                    f"<div><b>{html.escape(m.label)}</b> <span class=u>{html.escape(m.units)}</span> {anchor}</div>"
                    f"<div><span class=pt>{_fmt(m.point, m.kind)}</span> "
                    f"<span class=band>band {band}</span></div></div>"
-                   f"<div style='margin:8px 0'>{spark} <span class=u>backtest: baseline WAPE/MAE "
+                   f"<div style='margin:8px 0'>{spark} <span class=u>backtest: baseline MAE "
                    f"{res['baseline_error']:.3f} · {res['n_origins']} origins"
                    f"{' · FALLBACK' if res['fallback'] else ''}</span></div>"
                    f"<table><thead><tr><th>candidate</th><th>bt error</th><th>pred</th>"
@@ -188,7 +188,11 @@ def output_page():
             val = _fmt(m["point"], m["kind"]) if m["point"] is not None else "—"
             bd = m.get("band")
             band = f" <span class=band>[{_fmt(bd[0], m['kind'])}–{_fmt(bd[1], m['kind'])}]</span>" if bd else ""
-            rows += (f"<div class=mrow><span>{html.escape(m['label'])} <span class=u>{html.escape(m['units'])}</span></span>"
+            source = (m.get("selection") or {}).get("source", "direct")
+            source_badge = ("<span class='badge guide'>nested</span>" if source == "nested"
+                            else "<span class=badge>direct fallback</span>")
+            rows += (f"<div class=mrow><span>{html.escape(m['label'])} <span class=u>{html.escape(m['units'])}</span> "
+                     f"{source_badge}</span>"
                      f"<span><span class=pt>{val}</span>{band}</span></div>")
         status = ("<span class='badge guide'>ready</span>" if ready
                   else "<span class=badge>pending</span>")
@@ -204,7 +208,7 @@ def output_page():
            f"<div class=mrow><span>checker</span><span class=u>{html.escape(spec['checker'])}</span></div>"
            f"<div class=mrow><span>upload</span><span class=u>{html.escape(spec['upload'])}</span></div>"
            f"<div style='margin-top:8px'><b class=u>Contract (Summary sheet)</b><ul class=u style='margin:6px 0'>{contract}</ul></div></div>")
-    action = (f"<div class=card><a href='/output?write=1'>▶ run pipeline for all four & write workbooks to submission/</a>"
+    action = ("<div class=card><a href='/output?write=1'>▶ run pipeline for all four & write workbooks to submission/</a>"
               + (f" <span class=u>· wrote {sum(1 for c in manifest['companies'] if c.get('written'))} files</span>" if write else "")
               + "</div>")
     body = (f"<h1>Output layer</h1><div class=sub>The four companies through one pipeline → "
@@ -215,17 +219,19 @@ def output_page():
 
 @app.get("/backtest")
 def backtest_page():
-    from . import prequential as _pq
     from . import param_eval as _pe
+    from . import prequential as _pq
+
     rows = _pq.run_all()
     pe_map = {(x["ticker"], x["label"]): x for x in _pe.compare_all()}
+    nested = selection.nested_bundle()["report"]
     # write outputs/backtest.json (Methodology 1 §11 auditability)
     try:
         outdir = os.path.join(ROOT, "outputs")
         os.makedirs(outdir, exist_ok=True)
         with open(os.path.join(outdir, "backtest.json"), "w", encoding="utf-8") as fh:
             _json.dump(rows, fh, ensure_ascii=False, indent=2, default=str)
-    except Exception:
+    except OSError:
         pass
 
     def _pct(x):
@@ -268,17 +274,36 @@ def backtest_page():
                 sens = pe.get("sensitivity") or {}
                 beats = "beats seasonal-naive ✓" if pe["beats_baseline"] else "≤ baseline"
                 robust = "robust across windows" if sens.get("robust") else "window-sensitive"
-                body += (f"<div class=ev style='color:#8fa8c8'>▸ param eval: best <b>{html.escape(pe['best'])}</b> "
+                body += (f"<div class=ev style='color:#8fa8c8'>▸ candidate screen: best <b>{html.escape(pe['best'])}</b> "
                          f"· {beats} · {robust} · ranking: {html.escape(rank)}</div>")
             body += "</div>"
         cards += (f"<div class=card><b>{html.escape(crows[0]['company'])}</b> "
                   f"<span class=badge>{html.escape(crows[0]['period'])}</span>{body}</div>")
+    nested_summary = nested["outer_summary"]
+    recommendations = nested["deployment_recommendations"]
+    config_text = " · ".join(
+        f"{ticker}:{recommendation['config_id']}"
+        for ticker, recommendation in recommendations.items()
+        if recommendation is not None
+    )
+    nested_card = (
+        "<div class=card><b>Nested causal parameter evaluation</b> "
+        "<span class='badge guide'>formal selection evidence</span>"
+        f"<div class=mrow><span>unseen company-rounds / predictions</span>"
+        f"<span>{nested_summary['company_rounds']} / {nested_summary['predictions']}</span></div>"
+        f"<div class=mrow><span>aggregate skill vs seasonal-naive</span>"
+        f"<span>{_pct(nested_summary['aggregate_skill'])}</span></div>"
+        f"<div class=mrow><span>deployment config</span>"
+        f"<span>{html.escape(config_text)}</span></div>"
+        "<div class=ev>Inner selection uses only paired origins before each outer target; "
+        "deployment recommendation is excluded from outer performance.</div></div>"
+    )
     body = (f"<h1>Prequential backtest — results & analysis</h1>"
-            f"<div class=sub>Walk-forward one-step-ahead (pulled from quant-projects garch_var). "
-            f"Point error (WAPE/RMSE) + VaR-style band coverage + Kupiec POF test. "
+            f"<div class=sub>Walk-forward one-step-ahead with causal gap filling. "
+            f"Primary point loss: MAE; WAPE/RMSE remain diagnostics. "
             f"<b>{n_tested}/12 metrics tested · {n_miscal} band(s) miscalibrated.</b> "
             f"Written to <code>outputs/backtest.json</code>.</div>"
-            f"{cards}<a href='/graph'>← pipeline graph</a> · <a href='/'>overview</a>")
+            f"{nested_card}{cards}<a href='/graph'>← pipeline graph</a> · <a href='/'>overview</a>")
     return Response(_page("Backtest", body), mimetype="text/html")
 
 
@@ -334,7 +359,7 @@ def _methodology_html():
          "<b class=u>Flow</b><div class=u style='margin:4px 0 8px'>" +
          " → ".join(html.escape(s) for s in M["flow"]) + "</div>" +
          "<b class=u>Data priority</b>" + ul(M["data"]["priority"]) +
-         "<b class=u>Baseline — current form (backtesting deferred)</b>"
+         "<b class=u>Baseline — guarded nested selection with direct fallback</b>"
          f"<div class=u style='margin:4px 0'>{html.escape(M['baseline']['formula'])}</div>"
          f"<div class=u style='margin:0 0 8px'>allowed: {', '.join(M['baseline']['allowed'])}; "
          f"forbidden: {html.escape(M['baseline']['forbidden'])}</div>"
@@ -406,7 +431,7 @@ def _graph_svg(fc, mf):
     # P2 Methodology (control plane) — Methodology 1
     parts.append(_rect(360, 262, 340, 40, "methodology", "#1a1f27", "#4a5568",
                        ["Methodology 1 · click to read", "filing baseline + guidance — decides HOW"]))
-    parts.append(f'<line x1="520" y1="222" x2="530" y2="262" stroke="#3a4658" stroke-width="1.4"/>')
+    parts.append('<line x1="520" y1="222" x2="530" y2="262" stroke="#3a4658" stroke-width="1.4"/>')
     mthb = (530, 302)
     nodes["methodology"] = {"t": methodology.METHODOLOGY_1["name"], "plug": "no",
                             "sub": "P2 · FIXED / constitutional — the agent reads this and obeys it",
@@ -451,7 +476,7 @@ def _graph_svg(fc, mf):
         wt = row.get("weight", 0.0)
         col = "#f0b768" if row.get("eligible") else "#2b3745"
         parts.append(f'<path d="M{mx},{my} C{mx},458 {btc[0]},458 {btc[0]},488" fill="none" stroke="{col}" stroke-width="{0.6+wt*7:.1f}" opacity="0.75"/>')
-    parts.append(f'<line x1="530" y1="508" x2="600" y2="508" stroke="#4a5a6e" stroke-width="2.4"/>')
+    parts.append('<line x1="530" y1="508" x2="600" y2="508" stroke="#4a5a6e" stroke-width="2.4"/>')
     nodes["backtest"] = {"t": "Rolling-origin backtest · gate", "plug": "no", "sub": "P4 · Backtesting (executes methodology)",
                          "body": "Executes the methodology: at each trailing origin fit on data-up-to-then, predict "
                                  "next, score; drop anything that can't beat seasonal-naive."}
@@ -462,7 +487,7 @@ def _graph_svg(fc, mf):
     parts.append(_rect(320, 584, 170, 40, "guardrail", "#16241b", "#2f6b43", ["Guardrail band", "point ± ens-error"]))
     parts.append(_rect(560, 584, 170, 40, "emit", "#16241b", "#2f6b43", [fc["output_file"], "Summary sheet"]))
     parts.append(f'<path d="M{eno[0]},{eno[1]} C{eno[0]},558 405,558 405,584" fill="none" stroke="#3a6b47" stroke-width="2"/>')
-    parts.append(f'<line x1="490" y1="604" x2="560" y2="604" stroke="#3a6b47" stroke-width="2"/>')
+    parts.append('<line x1="490" y1="604" x2="560" y2="604" stroke="#3a6b47" stroke-width="2"/>')
     nodes["guardrail"] = {"t": "Guardrail band", "plug": "no", "sub": "P5 · Output",
                           "body": f"Point {_fmt(mf.point, mf.kind) if mf and mf.point is not None else '—'} "
                                   f"± ensemble error → band. Consensus-clamp seam (corpus-only for now)."}
@@ -571,15 +596,30 @@ _APPROACH_NODE = {
     "bridge": "app_bridge", "fy_ni_bridge": "app_bridge", "segment_margin": "app_bridge",
 }
 _APPROACH_META = {
-    "app_guidance": ("Guidance anchor", "management's published numbers",
-                     "Anchor to management guidance: midpoint, stated range, or reversion toward the guide. "
-                     "Methodology 1 §5 guidance calibration. Metrics: ADI Rev/EPS, HD comp, HAS OP."),
-    "app_seasonal": ("Seasonal + trend", "historical anchor + recent growth",
-                     "Same-quarter seasonal anchor + recent-trend adjustment on the extracted actual series. "
-                     "Methodology 1 §5 seasonal anchor + recent-trend. Metrics: HD net sales/EPS, ADI GM, HAS net fees, DE net sales."),
-    "app_bridge": ("Accounting bridge", "EPS / OP via financial identities",
-                   "Derive via accounting identities: EPS = after-tax profit ÷ shares; operating profit = base × margin/conversion; "
-                   "segment sales × margin. Methodology 1 §4/§9. Metrics: DE EPS & PPA OP, HAS EPS."),
+    "app_guidance": (
+        "Guidance anchor",
+        "management's published numbers",
+        (
+            "Anchor to management guidance: midpoint, stated range, or reversion toward the guide. "
+            "Methodology 1 §5 guidance calibration. Metrics: ADI Rev/EPS, HD comp, HAS OP."
+        ),
+    ),
+    "app_seasonal": (
+        "Seasonal + trend",
+        "historical anchor + recent growth",
+        (
+            "Same-quarter seasonal anchor plus a recent-trend adjustment. Methodology 1 §5. "
+            "Metrics: HD net sales/EPS, ADI GM, HAS net fees, DE net sales."
+        ),
+    ),
+    "app_bridge": (
+        "Accounting bridge",
+        "EPS / OP via financial identities",
+        (
+            "Derive via accounting identities: EPS = after-tax profit ÷ shares; operating profit = "
+            "base × margin/conversion; segment sales × margin. Metrics: DE EPS/PPA OP, HAS EPS."
+        ),
+    ),
 }
 
 
@@ -610,7 +650,7 @@ def _combined_svg(manifest, spec):
     band("INPUT · four companies", 30, "company code + required output", "#6b7480")
     band("P1 · DATA INGESTION", 122, "corpus → extract → panel", "#6aa0ff")
     band("P2 · METHODOLOGY 1", 258, "fixed — decides HOW and owns the model approaches", "#8b93a1")
-    band("P3 · MODEL APPROACHES", 350, "owned by Methodology 1 (backtesting deferred)", "#f0b768")
+    band("P3 · MODEL APPROACHES", 350, "owned by Methodology 1 · nested-evaluated", "#f0b768")
     band("P4 · CONTROL · BACKTEST · PARAM-EVAL", 458, "validate + walk-forward backtest + model grid — run alongside", "#8b93a1")
     band("P5 · OUTPUT LAYER", 530, "4 workbooks · 12 numbers", "#3fb950")
 
@@ -699,7 +739,7 @@ def _combined_svg(manifest, spec):
     parts.append(_rect(396, 470, 268, 38, "prequential", "#1b222c", "#3a4658",
                        ["Prequential backtest", "walk-forward · coverage · Kupiec"]))
     parts.append(_rect(692, 470, 268, 38, "param_eval", "#1b222c", "#3a4658",
-                       ["Parameter eval", "model grid · rank · robustness"]))
+                       ["Nested parameter eval", "inner select · outer score · paired baseline"]))
     from . import stats_control as _sc
     summ_sc = {"pass": 0, "warn": 0, "fail": 0, "n": 0}
     for c in cos:                                     # per company so duplicate labels (EPS) aren't merged
@@ -727,18 +767,25 @@ def _combined_svg(manifest, spec):
                                      "<span class=u>LR test that breach rate is calibrated (χ²₁)</span></div><br>"
                                      "<span class=u>Runs where a historical series exists (ADI full panel, HD releases).</span>"
                                      "<br><br><a href='/backtest'>▸ open full backtest results &amp; analysis</a>")}
-    nodes["param_eval"] = {"t": "Parameter eval — model grid", "plug": "no",
-                           "sub": "P4 · pulled from quant-projects (compare_models + sensitivity)",
-                           "body": ("For each metric, evaluate a GRID of candidate models "
-                                    "(seasonal-naive · naive · drift · trend · AR · ETS · guidance) by prequential "
-                                    "out-of-sample error, rank them, pick the best and check it beats the "
-                                    "Seasonal-Naive baseline — the <b>compare_models</b> analog. Then a "
-                                    "<b>sensitivity</b> grid over the backtest window flags whether the winner is "
-                                    "robust or fragile.<br><br>"
-                                    "<span class=u>Findings drive model choice: e.g. ADI EPS → guidance wins "
-                                    "(validates the methodology); ADI gross margin → AR beats the drift the pipeline "
-                                    "currently uses.</span><br><br>"
-                                    "<a href='/backtest'>▸ see the per-metric model ranking</a>")}
+    nested = selection.nested_bundle()["report"]
+    nested_summary = nested["outer_summary"]
+    nested_configs = " · ".join(
+        f"{ticker}:{recommendation['config_id']}"
+        for ticker, recommendation in nested["deployment_recommendations"].items()
+        if recommendation is not None
+    )
+    nodes["param_eval"] = {"t": "Nested causal parameter evaluation", "plug": "no",
+                           "sub": "P4 · paired inner selection + unseen outer scoring",
+                           "body": ("Each outer target selects one BacktestConfig using only paired "
+                                    "origins strictly before that target. The selected config is then "
+                                    "scored against the same seasonal-naive baseline on the unseen target."
+                                    f"<br><br><div class=kv><span>outer evidence</span><span>"
+                                    f"{nested_summary['company_rounds']} company-rounds · {nested_summary['predictions']} predictions"
+                                    f"</span></div><div class=kv><span>aggregate skill</span><span>"
+                                    f"{nested_summary['aggregate_skill']:.1%}</span></div>"
+                                    f"<div class=kv><span>deployment config</span><span>"
+                                    f"{html.escape(nested_configs)}</span></div><br>"
+                                    "<a href='/backtest'>▸ inspect nested and per-metric diagnostics</a>")}
 
     # P5 output — four workbooks + OUTPUT spec
     for c, x in zip(cos, xs):
@@ -915,13 +962,14 @@ def api_run():
                 yield sse({"node": "llm_driver", "cls": "d",
                            "log": "   LLM driver · no key (set OPENAI_API_KEY in .env) — numeric pipeline unaffected"})
             time.sleep(0.25)
-            d = direct.forecast(t)
+            d = selection.forecast(t)
             metrics = []
             for m in sp["metrics"]:
                 lbl = m["label"]
                 mm = d["metrics"].get(lbl)
                 metrics.append({"label": lbl, "units": m["units"], "band": mm["band"] if mm else None,
-                                "point": mm["point"] if mm else None, "kind": mm["kind"] if mm else None})
+                                "point": mm["point"] if mm else None, "kind": mm["kind"] if mm else None,
+                                "selection": mm.get("selection") if mm else None})
                 approach = a.get("metrics", {}).get(lbl, {}).get("approach", "")
                 anode = _APPROACH_NODE.get(approach, "app_seasonal")
                 aname = _APPROACH_META.get(anode, ("", ""))[0]
@@ -962,17 +1010,15 @@ def api_run():
                 yield sse({"node": "prequential", "cls": "d",
                            "log": f"   P4 · backtest ({t}) skipped — no historical series yet"})
             time.sleep(0.2)
-            # P4 · parameter eval (model grid: compare candidates, pick best, robustness)
-            from . import param_eval as _pe
+            # P4 · nested parameter decision (formal outer evidence + deployment gate)
             for mm in metrics:
-                c = _pe.compare(t, mm["label"], mm["kind"] or "money")
-                if c.get("insufficient"):
-                    continue
-                sens = c.get("sensitivity") or {}
-                tag = ("beats baseline" if c["beats_baseline"] else "≤ baseline") + \
-                      (", robust" if sens.get("robust") else ", window-sensitive")
+                decision = mm.get("selection") or {}
+                source = decision.get("source", "direct")
+                skill = decision.get("outer_skill")
+                skill_text = f"outer skill={skill:.1%}" if skill is not None else "no outer evidence"
+                reason = ", ".join(decision.get("reasons", []))
                 yield sse({"node": "param_eval", "cls": "d",
-                           "log": f"   P4 · param-eval {mm['label']}: best={c['best']} ({tag})"})
+                           "log": f"   P4 · nested decision {mm['label']}: {source} ({skill_text}{'; ' + reason if reason else ''})"})
                 time.sleep(0.14)
             time.sleep(0.15)
             path = workbook.write_direct(sp["outputFile"], sp["period"], metrics)
@@ -990,7 +1036,7 @@ def api_validate():
     from flask import request
     try:
         node = request.get_json(force=True)
-    except Exception as exc:
+    except BadRequest as exc:
         return {"verdict": "invalid", "messages": [f"bad JSON: {exc}"]}
     return governance.validate_node(node)
 
@@ -1000,7 +1046,7 @@ def api_addnode():
     from flask import request
     try:
         node = request.get_json(force=True)
-    except Exception as exc:
+    except BadRequest as exc:
         return {"saved": False, "verdict": "invalid", "messages": [f"bad JSON: {exc}"]}
     v = governance.validate_node(node)
     if v.get("verdict") not in ("publishable", "declarable"):

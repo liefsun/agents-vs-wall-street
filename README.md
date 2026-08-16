@@ -57,6 +57,23 @@ Start from the supplied files in `challenge/templates/`. Do not rename the `Summ
 
 Run `npm install` and `npm run setup:entry` once. Complete the private `entry.json` and `architecture/index.html`, then use `npm run check:submission` before uploading. It checks the entry record, architecture file and four workbooks. It does not judge whether the forecasts are good.
 
+## Current forecasting agent
+
+The implemented pipeline combines filing-based direct forecasts with guarded nested
+causal model selection. A nested forecast replaces the direct value only when it has
+at least three unseen outer origins, positive outer skill against seasonal naive, and
+a non-fallback deployment ensemble with positive skill. Metrics without enough history
+remain on the auditable direct forecast.
+
+```bash
+uv run --with-requirements agent/requirements.txt python -m agent.run
+npm run check:forecasts
+```
+
+The final command writes all four workbooks plus ignored runtime reports under
+`outputs/`. See [the tracked nested-evaluation report](docs/NESTED_PARAMETER_EVALUATION.md)
+for the causal contract, outer results and forecast impact.
+
 ## Optional document-search helper
 
 [`starter/search.py`](starter/search.py) is a small, dependency-free example of searching the supplied Markdown corpus and producing a cited research note. It does not make forecasts or edit a workbook.
@@ -78,6 +95,9 @@ submission/                Put the four completed workbooks here
 logs/                      Save the final clear-run log here
 scripts/                   Local entry and workbook checks
 starter/                   Optional historical-document search helper
+agent/                     Forecasting, causal backtest and guarded selection pipeline
+docs/                      Run contract and tracked evaluation report
+tests/                     Causality, pairing, selection and organiser helper tests
 ```
 
 ## Licence

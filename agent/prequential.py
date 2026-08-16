@@ -48,7 +48,8 @@ _GUIDANCE_APPROACHES = {"guidance", "guide_reversion", "stated"}
 
 def run(axis, values, kind: str, approach: str | None = None,
         guidance_by_key: dict | None = None, conf: float = 0.80,
-        model_fn=None, model_name: str | None = None) -> dict:
+        model_fn=None, model_name: str | None = None,
+        origin_window: int = ORIGIN_WINDOW) -> dict:
     """Walk-forward prequential backtest that REPLAYS THE ACTUAL APPROACH.
 
     - guidance approaches: at each origin predict with the guidance issued for that
@@ -66,7 +67,7 @@ def run(axis, values, kind: str, approach: str | None = None,
     z = _Z.get(conf, 1.2816)
     use_guidance = (model_fn is None) and approach in _GUIDANCE_APPROACHES and bool(guidance_by_key)
 
-    start = max(MIN_TRAIN, len(y) - ORIGIN_WINDOW)
+    start = max(MIN_TRAIN, len(y) - origin_window)
     pairs, resid_hist, breaches = [], [], []
     for t in range(start, len(y)):
         if filled[t]:
@@ -187,10 +188,10 @@ def _kind_from_units(units: str) -> str:
 
 
 def headline_error(r: dict) -> str:
-    """Kind-appropriate point-error headline: pct → MAE in points, else WAPE."""
+    """MAE-first headline; percentage metrics are expressed in points."""
     if r.get("kind") == "pct":
         return f"MAE {r['mae']:.2f}pp"
-    return f"WAPE {r['wape']:.0%}"
+    return f"MAE {r['mae']:.3g}"
 
 
 def analyze(r: dict) -> str:
@@ -203,8 +204,12 @@ def analyze(r: dict) -> str:
     else:
         e = r["wape"]
         grade = "strong" if e < 0.10 else ("moderate" if e < 0.25 else "weak")
-    out = [f"Point accuracy: {headline_error(r)} over {r['n_origins']} walk-forward origins "
-           f"({grade}; model {r['model']})."]
+    out = [
+        (
+            f"Point accuracy: {headline_error(r)} over {r['n_origins']} walk-forward origins "
+            f"({grade}; model {r['model']}; WAPE diagnostic {r['wape']:.0%})."
+        )
+    ]
     kp, br, exp = r.get("kupiec_pvalue"), r.get("breach_rate"), r.get("expected_breach")
     if r.get("coverage_n") and br is not None:
         if kp is None:
@@ -221,7 +226,7 @@ def analyze(r: dict) -> str:
 
 def run_all() -> list[dict]:
     """Backtest every target metric (where a series exists). Returns a list of rows."""
-    from .forecast import company_spec, METRIC_MAP
+    from .forecast import METRIC_MAP, company_spec
     rows = []
     for t in ("HD", "ADI", "HAS", "DE"):
         spec = company_spec(t)
@@ -233,4 +238,3 @@ def run_all() -> list[dict]:
                          "label": lbl, "units": m["units"], "kind": kind,
                          "analysis": analyze(r), **r})
     return rows
-

@@ -13,3 +13,12 @@ This log records competition-specific work created after the official build star
 - First implementation objective: establish a repeatable run contract for all four
   companies before adding retrieval, forecasting and workbook-writing stages.
 
+## 2026-08-16 — Forecasting and causal evaluation implemented
+
+- Added filing/guidance direct forecasts and workbook generation for all 12 metrics.
+- Added causal gap filling, paired seasonal-naive comparisons and immutable
+  `BacktestConfig` policies.
+- Added nested inner selection and unseen outer evaluation with MAE-first reporting.
+- Connected the recommended configuration through an explicit evidence gate; six
+  metrics use nested forecasts and six retain direct fallbacks.
+- Final verification: 19 tests pass and all four workbooks pass the organiser checker.

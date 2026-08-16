@@ -1,17 +1,18 @@
-"""Direct output — Methodology 1, current form (backtesting deferred).
+"""Auditable direct forecast layer used as the guarded pipeline's fallback.
 
 For each target metric we produce the point directly from the adapter's approach:
   guidance anchor (calibrated) · seasonal + trend on the actual series · accounting
   bridge (EPS = after-tax ÷ shares; operating profit = base × margin/conversion).
 
-Every number carries a `basis` string and source excerpts (auditability, per the
-methodology). No rolling-origin backtest here — that layer is deferred.
+Every number carries a `basis` string and source excerpts. The selection layer may
+replace a point only when nested outer evidence passes its production gates.
 """
 from __future__ import annotations
 
 import re
 
 from . import corpus, methodology
+
 
 # ── small extraction helpers ──────────────────────────────────────────────────────
 def _num(s: str) -> float:
@@ -22,7 +23,7 @@ def _bn_to_m(v: float, unit: str) -> float:
     return v * 1000.0 if unit and unit.lower().startswith("b") else v
 
 
-def _find(body: str, pat: str, flags=re.I):
+def _find(body: str, pat: str, flags=re.IGNORECASE):
     m = re.search(pat, body, flags)
     return m if m else None
 
@@ -200,7 +201,8 @@ def _de() -> dict:
     q2 = next((d for d in reversed(rel) if d.period == "Q2 2026"), None)
     b = q2.body() if q2 else ""
     # FY net income guide midpoint
-    ni_mid = None; h1_ni = None; shares = None
+    ni_mid = None
+    h1_ni = None
     m = _find(b, r"net income[^.\n]*?fiscal 2026[^.\n]*?\$\s*([\d.]+)\s*billion\s*to\s*\$\s*([\d.]+)\s*billion")
     if not m:
         m = _find(b, r"forecasted to be in a range of\s*\$\s*([\d.]+)\s*billion\s*to\s*\$\s*([\d.]+)\s*billion")

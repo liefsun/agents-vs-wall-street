@@ -7,13 +7,12 @@ final numbers are produced. Methodologies are FIXED / constitutional — you aut
 new one (Methodology 2, …) to change the approach, you do not hot-swap it like a model.
 
 Methodology 1 (this file) = Filing-based quantitative baseline + management-guidance
-calibration + calls/slides qualitative state adjustment, with hazard/regime, SMC and
-backtesting described but DEFERRED — the first working form produces results directly.
+calibration + calls/slides qualitative state adjustment. Nested causal evaluation is
+active where histories are scoreable; other metrics retain an auditable direct fallback.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
 
 # ── Methodology 1: the full, agent-readable specification ─────────────────────────
 METHODOLOGY_1 = {
@@ -73,8 +72,11 @@ METHODOLOGY_1 = {
         "historical actuals for the 12 target metrics + revenue/margin/operating-profit/tax/shares",
         "YoY and QoQ, same-quarter seasonality, management guidance history, guidance-vs-actual error, key drivers",
         "never mix money / percentages / EPS",
-        "transforms: revenue/net-fees in log-level or growth; percentages in points or logit; "
-        "operating profit via revenue×margin; EPS via after-tax profit ÷ shares (never a blind independent series)",
+        (
+            "transforms: revenue/net-fees in log-level or growth; percentages in points or logit; "
+            "operating profit via revenue×margin; EPS via after-tax profit ÷ shares "
+            "(never a blind independent series)"
+        ),
     ],
     "baseline": {
         "formula": "next = seasonal anchor + recent-trend adjustment + guidance calibration + company operating adjustment",
@@ -167,12 +169,11 @@ METHODOLOGY_1 = {
         "never store API keys in the repo, logs, entry.json or HTML",
         "all competition-specific code/prompts/workflows created after the event starts",
     ],
-    "deferred": ["backtesting (rolling-origin)", "hazard/regime", "Sequential Monte Carlo",
+    "deferred": ["historical coverage for the remaining six metrics", "hazard/regime", "Sequential Monte Carlo",
                  "external-data nowcast"],
-    "current_form": ("Direct output: for each metric use the adapter's approach — guidance anchor "
-                     "(calibrated by historical guidance bias) where available, else seasonal + trend "
-                     "on the extracted actual series, with accounting bridges for EPS / operating profit. "
-                     "Backtesting is deferred; results are produced directly."),
+    "current_form": ("Guarded nested output: use the nested causal ensemble only when unseen outer "
+                     "evidence and deployment skill are positive; otherwise retain the adapter's direct "
+                     "guidance, seasonal or accounting-bridge forecast."),
 }
 
 
@@ -224,7 +225,7 @@ def metric_plan(ticker: str, label: str) -> dict:
     return METHODOLOGY_1["adapters"].get(ticker, {}).get("metrics", {}).get(label, {})
 
 
-# ── backtest / selection parameters (DEFERRED layer; kept for when it is switched on) ──
+# ── backtest / selection parameters (active for structured histories) ──────────────
 @dataclass(frozen=True)
 class Methodology:
     name: str = METHODOLOGY_1["name"]
@@ -232,18 +233,21 @@ class Methodology:
     min_train: int = 8
     min_origins: int = 6
     weight_cap: float = 0.60
+    baseline_weight_floor: float = 0.20
+    min_improvement: float = 0.05
+    season: int = 4
     baseline: str = "seasonal_naive"
 
     loss: dict = field(default_factory=lambda: {
-        "money": "WAPE = Σ|a−p| / Σ|a|", "eps": "MAE = mean|a−p| ($/share)",
+        "money": "MAE in reporting units", "eps": "MAE in $/share or pence/share",
         "pct": "MAE in percentage points"})
-    gate: str = "a candidate must beat Seasonal Naive or it is dropped"
+    gate: str = "a candidate must beat Seasonal Naive by at least 5% on paired origins"
     pit: str = "point-in-time: at each origin fit only on data available then; guidance only if issued before the target"
-    ensemble: str = "survivors weighted by 1/error, capped, renormalised; fall back to baseline"
-    guardrail: str = "point ± ensemble error → band (money multiplicative, eps/pct additive)"
+    ensemble: str = "paired relative-MAE weights; model cap 0.60; baseline floor 0.20"
+    guardrail: str = "point ± realized causal ensemble MAE (diagnostic, not calibrated)"
 
     def loss_kind(self, kind: str) -> str:
-        return "wape" if kind == "money" else "mae"
+        return "mae"
 
     def summary(self) -> dict:
         return {
