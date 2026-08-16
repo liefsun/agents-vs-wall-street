@@ -1,0 +1,9 @@
+{
+  "id": "lag_blend_1_4",
+  "label": "Lag blend · ½ last-qtr + ½ year-ago",
+  "plug": "hot",
+  "kind": "candidate",
+  "applies_to": ["money", "eps", "pct"],
+  "spec": { "type": "linear_lags", "lags": { "1": 0.5, "4": 0.5 } },
+  "note": "Hot-swap JSON node — drop this file in and it competes in the backtest, no code change."
+}
