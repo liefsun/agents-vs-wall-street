@@ -29,7 +29,9 @@ _load_env()
 
 class LLM:
     def __init__(self, model: str | None = None, use_cache: bool = True):
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        # Default is gpt-4o so a fresh clone (no .env) hits the committed gpt-4o research
+        # cache and reproduces the submitted numbers offline. Override with OPENAI_MODEL.
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
         self.key = (os.getenv("OPENAI_API_KEY") or "").strip()
         self.use_cache = use_cache
         self._client = None
