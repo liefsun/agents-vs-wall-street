@@ -340,8 +340,44 @@ npm run check:forecasts</code></pre>
         <li><strong>Hand-written regular expressions for reading.</strong> They worked until they did not, and their failures were silent — a pattern would match a nearby number in a different row. Replaced by the research agent with a quote requirement.</li>
         <li><strong>Substituting GAAP EPS where adjusted EPS was missing.</strong> It would have removed a skip and made coverage look better. It is a different metric, so the skip stays.</li>
         <li><strong>Treating Hays fiscal years as a quarterly axis.</strong> Its H1/FY reporting is semiannual; forcing season 4 onto it produced meaningless seasonal comparisons. It now runs on season 2 with its own pre-registered protocol.</li>
-        <li><strong>A second methodology (historical-analogue matching with weighted scenarios) and an LLM orchestrator choosing between the two per metric.</strong> Built and explored on a branch. It is not in the submission path: it bypasses the causal evidence gate, and we were not willing to swap a measured selector for an unmeasured one on the day.</li>
+        <li><strong>An LLM orchestrator that picked the methodology per metric.</strong> It bypassed the causal evidence gate, and we were not willing to swap a measured selector for an unmeasured one on the day. The two methodologies stay side by side for comparison; the gate, not a model, still chooses what ships.</li>
       </ul>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <section>
+      <h2>A second methodology — historical analogue</h2>
+      <p>
+        Alongside the filing-based engine we built a second, independent methodology and run it over
+        the same point-in-time series, so every figure can be seen through two different lenses
+        rather than one.
+      </p>
+      <p>
+        Where Methodology 1 asks <em>what does the filing plus the model say next quarter is</em>,
+        Methodology 2 asks <em>which past quarters looked like now, and what happened right after
+        them</em>. For each target it builds a point-in-time snapshot of the company's state
+        (year-over-year and quarter-over-quarter growth, momentum, volatility), standardises it on
+        the then-available history alone, finds the nearest historical analogues by distance, weights
+        them by similarity and recency, and turns their realised next-period outcomes into an
+        evidence-weighted <strong>Bear / Base / Bull</strong> distribution — the Base, a weighted
+        median, is the point.
+      </p>
+      <p>
+        It obeys the same discipline as the rest of the system: the snapshot at time <em>t</em> uses
+        only information published on or before <em>t</em>, the standardisation statistics come from
+        the training window alone, and the analogue target is the next period actually reported after
+        <em>t</em> — no leakage. <code>/report</code> shows Methodology 1 against Methodology 2 side
+        by side per metric, and the graph runs both.
+      </p>
+      <div class="note">
+        <p>
+          <strong>Why the submitted numbers still come from Methodology 1.</strong> Every Methodology 1
+          figure is a model whose skill was measured on targets it never saw and that cleared the
+          causal evidence gate. Methodology 2 is a genuine second approach and a cross-check, but we
+          did not swap a measured selector for an unmeasured one on submission day: it informs how much
+          we trust a figure, it does not overwrite it.
+        </p>
+      </div>
     </section>
 
     <!-- ══════════════════════════════════════════════════════════════════ -->
@@ -483,17 +519,15 @@ npm run check:forecasts</code></pre>
         files and one timestamped record, which is exactly what a reviewer needs to check a run.
       </p>
 
-      <h3>Two layers we built for comparison, not for the number</h3>
+      <h3>The autonomous provisioning layer</h3>
       <p>
-        Before selection the pipeline runs an <strong>autonomous provisioning</strong> step: for
-        each metric an agent reads a catalogue of what features actually exist and each
-        methodology's input requirements, and decides how to provision them — bounded by a
-        deterministic feature-control (enough history, non-degenerate variance, coverage) that it
-        is not allowed to override. We also built a second, independent <strong>Methodology 2</strong>
-        — historical-analogue matching with evidence-weighted Bear/Base/Bull scenarios — and compare
-        it against Methodology 1 in <code>/report</code>. Both are inspection and comparison
-        surfaces: the submitted twelve numbers come from the guarded-nested Methodology 1 path
-        described above, and neither layer can move a figure past the evidence gate.
+        Before selection the pipeline runs an <strong>autonomous provisioning</strong> step: for each
+        metric an agent reads a catalogue of what features actually exist and each methodology's input
+        requirements, and decides how to provision them — bounded by a deterministic feature-control
+        (enough history, non-degenerate variance, coverage) that it is not allowed to override. It and
+        the second methodology above are inspection and comparison surfaces: the submitted twelve
+        numbers come from the guarded-nested Methodology 1 path, and neither can move a figure past the
+        evidence gate.
       </p>
     </section>
 
