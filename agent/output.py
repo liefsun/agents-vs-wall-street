@@ -58,17 +58,34 @@ def run_pipeline(write: bool = False, selection_mode: str = selection.GUARDED_NE
     for t in TICKERS:
         spec = company_spec(t)
         d = selection.forecast(t, mode=selection_mode)
+        from . import methodology_compare as mc
         metrics = []
         for m in spec["metrics"]:
             mm = d["metrics"].get(m["label"])
-            metrics.append({"label": m["label"], "units": m["units"],
-                            "point": mm["point"] if mm else None,
-                            "kind": mm["kind"] if mm else None,
-                            "band": mm["band"] if mm else None,
-                            "basis": mm["basis"] if mm else None,
-                            "sources": mm["sources"] if mm else [],
-                            "selection": mm.get("selection") if mm else None,
-                            "direct_point": mm.get("direct_point") if mm else None})
+            metric = {"label": m["label"], "units": m["units"],
+                      "point": mm["point"] if mm else None,
+                      "kind": mm["kind"] if mm else None,
+                      "band": mm["band"] if mm else None,
+                      "basis": mm["basis"] if mm else None,
+                      "sources": mm["sources"] if mm else [],
+                      "selection": mm.get("selection") if mm else None,
+                      "direct_point": mm.get("direct_point") if mm else None}
+            # Dual-methodology: compare Methodology 2 (analogue) against the SUBMITTED
+            # guarded-nested Methodology 1 in the same causal skill frame; switch to M2 only
+            # where its measured out-of-sample skill is clearly higher (else keep M1).
+            if metric["point"] is not None and metric["kind"]:
+                sel = metric.get("selection") or {}
+                choice = mc.m2_vs_m1_skill(t, m["label"], metric["kind"], sel.get("outer_skill"))
+                metric["m2_decision"] = choice
+                if choice.get("use_m2"):
+                    metric["m1_point"] = metric["point"]
+                    metric["point"] = choice["m2_point"]
+                    metric["selection"] = {**sel, "source": "methodology-2",
+                                           "outer_skill": choice["m2_skill"],
+                                           "m2_skill": choice["m2_skill"], "m1_skill": choice.get("m1_skill"),
+                                           "outer_origins": choice.get("m2_origins"),
+                                           "methodology": "Methodology 2 · historical analogue"}
+            metrics.append(metric)
         # deterministic reconciliation guard — blend toward issued guidance where the model
         # wanders off it (accuracy), flag anchorless large disagreements (safety). Runs before
         # the workbook is written so the guarded numbers are what ship.

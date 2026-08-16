@@ -193,6 +193,12 @@ def build_lines(manifest: dict) -> list[str]:
                 note = "✗ FAILURE — no number produced"
                 if reasons:
                     note += ": " + "; ".join(str(r) for r in reasons)
+            elif src == "methodology-2":
+                sk2 = (m.get("selection") or {}).get("m2_skill")
+                m1s = (m.get("selection") or {}).get("m1_skill")
+                note = "**Methodology 2 (historical analogue) selected**"
+                if isinstance(sk2, (int, float)):
+                    note += f" — M2 outer skill {sk2:+.2f}" + (f" > guarded-nested M1 {m1s:+.2f}" if isinstance(m1s, (int, float)) else "")
             elif src == "nested":
                 cfg = (m.get("selection") or {}).get("config_id")
                 note = "nested ensemble promoted" + (f" ({cfg} config)" if cfg else "")
@@ -206,6 +212,11 @@ def build_lines(manifest: dict) -> list[str]:
             row = f"- **{m['label']}** — {note}."
             if basis:
                 row += f" Basis: {basis}"
+            # dual-methodology check: show that Methodology 2 was evaluated per metric
+            dec = m.get("m2_decision") or {}
+            if "m2_skill" in dec and src != "methodology-2":
+                row += (f" _[M2 checked: analogue skill {dec['m2_skill']:+.2f} on {dec.get('m2_origins','?')} origins"
+                        f" — {dec.get('reason') or 'not selected'}]_")
             L.append(row)
 
         # ── Reconciliation guard — guidance blends + anchorless flags (accuracy pass)

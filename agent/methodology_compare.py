@@ -81,6 +81,46 @@ def _seasonal_naive_err(ticker, label, kind):
     return r["mae"] if kind == "pct" else r["wape"]
 
 
+SKILL_MARGIN = 0.05     # M2 must beat the submitted M1 by this much measured skill to win
+MIN_M2_SKILL = 0.15     # ...AND have this much absolute skill (a real signal, not marginal noise)
+
+
+def m2_vs_m1_skill(ticker, label, kind, m1_skill):
+    """Does Methodology 2 beat the SUBMITTED (guarded-nested) Methodology 1 on measured
+    out-of-sample skill vs seasonal-naive? Same causal frame as M1's outer skill: both are
+    (1 - error/seasonal-naive-error) on walk-forward origins. Returns the decision + M2's
+    point/skill/origins. Deterministic; used to wire M2 into the submission per metric.
+
+    Conservative on purpose: M2 wins only if it beats seasonal-naive AND beats M1's measured
+    skill by SKILL_MARGIN AND has enough origins — otherwise keep M1 (never trade a measured
+    skill for a worse or noisier one)."""
+    bt = backtest_m2(ticker, label, kind)
+    if bt.get("insufficient"):
+        return {"use_m2": False, "reason": "M2 backtest insufficient (too few analogue origins)"}
+    snaive = _seasonal_naive_err(ticker, label, kind)
+    if not snaive:
+        return {"use_m2": False, "reason": "no seasonal-naive baseline to score M2 against"}
+    m2_skill = 1.0 - bt["err"] / snaive
+    fc = m2_forecast(ticker, label, kind)
+    if fc.get("insufficient") or fc.get("point") is None:
+        return {"use_m2": False, "m2_skill": m2_skill, "reason": "M2 forecast unavailable"}
+    m1s = m1_skill if isinstance(m1_skill, (int, float)) else -1.0
+    meaningful = m2_skill >= MIN_M2_SKILL
+    beats_m1 = m2_skill > m1s + SKILL_MARGIN
+    use = meaningful and beats_m1 and bt["n_origins"] >= MIN_ORIGINS
+    if use:
+        reason = None
+    elif not meaningful:
+        reason = f"M2 skill {m2_skill:+.2f} below the {MIN_M2_SKILL:.2f} meaningful-skill bar"
+    elif not beats_m1:
+        reason = f"M2 skill {m2_skill:+.2f} does not beat guarded-nested M1 {m1s:+.2f} by ≥{SKILL_MARGIN:.0%}"
+    else:
+        reason = f"too few M2 origins ({bt['n_origins']})"
+    return {"use_m2": bool(use), "m2_point": fc["point"], "m2_skill": m2_skill,
+            "m1_skill": (m1_skill if isinstance(m1_skill, (int, float)) else None),
+            "m2_origins": bt["n_origins"], "reason": reason}
+
+
 def compare(ticker, label, kind):
     """Compare M1 (its approach) vs M2 (analogue) PIT → gate → selected + fallback reason."""
     m1 = prequential.backtest_metric(ticker, label, kind)
