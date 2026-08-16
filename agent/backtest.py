@@ -17,14 +17,17 @@ from __future__ import annotations
 import numpy as np
 
 from . import governance
+from .methodology import METHOD
 
-WEIGHT_CAP = 0.60
-BASELINE_WEIGHT_FLOOR = 0.20
-MIN_IMPROVEMENT = 0.05
-MIN_TRAIN = 8
-MIN_ORIGINS = 6
-ORIGIN_WINDOW = 16
-SEASON = 4
+# The BACKTESTING layer reads its parameters from the METHODOLOGY layer (the control
+# plane). Change the method there, not here. Aliased for readability below.
+WEIGHT_CAP = METHOD.weight_cap
+BASELINE_WEIGHT_FLOOR = METHOD.baseline_weight_floor
+MIN_IMPROVEMENT = METHOD.min_improvement
+MIN_TRAIN = METHOD.min_train
+MIN_ORIGINS = METHOD.min_origins
+ORIGIN_WINDOW = METHOD.origin_window     # trailing window dodges regime/acquisition step-changes
+SEASON = METHOD.season
 GUIDANCE_KEY = "guidance"
 GUIDANCE_LABEL = "Company guidance (issued t-1)"
 
