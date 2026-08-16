@@ -241,6 +241,26 @@ def _de() -> dict:
     return out
 
 
+def _de_series():
+    """(period -> {net_sales_rev, eps_gaap}) from Deere quarterly releases (for backtesting)."""
+    rows = {}
+    for d in _releases("DE"):
+        if not d.period or d.period.startswith("FY"):        # quarterly only (skip annual)
+            continue
+        b = d.body()
+        r = {}
+        m = _find(b, r"[Ww]orldwide net sales and revenues[^.]{0,70}?to\s*\$\s*([\d.,]+)\s*billion")
+        if m:
+            r["net_sales_rev"] = _num(m.group(1)) * 1000
+        # quarterly diluted EPS: "... for the <ordinal> quarter ... or $X.XX per share"
+        m = _find(b, r"for the [a-z]+ quarter[^.]{0,90}?or\s*\$\s*([\d.]+)\s*per share")
+        if m and _num(m.group(1)) < 40:
+            r["eps_gaap"] = _num(m.group(1))
+        if r:
+            rows[d.period] = r
+    return rows
+
+
 _ADAPTERS = {"ADI": _adi, "HD": _hd, "HAS": _has, "DE": _de}
 
 

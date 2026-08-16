@@ -8,3 +8,5 @@ research/
 !.env.example
 entry.json
 submission/*.xlsx
+outputs/
+agent/cache/
