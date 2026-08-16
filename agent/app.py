@@ -354,6 +354,29 @@ def _rect(x, y, w, h, nid, fill, stroke, lines, dash=False, ring=None):
     return f'<g class=gnode id="n_{nid}" onclick="show(\'{nid}\')">{rr}{r}{txt}</g>'
 
 
+def _candidate_configs():
+    """The BacktestConfig grid, flattened to one list of config dicts.
+
+    A shared grid is reported as a list, but the company-local protocols (quarterly
+    season 4 against Hays H1/FY season 2) report
+    {"company_local": True, "by_company": {ticker: [config, ...]}} instead. Identical
+    grids are merged and tagged with the tickers that use them.
+    """
+    reported = selection.nested_bundle()["report"]["candidate_configs"]
+    if not isinstance(reported, dict):
+        return list(reported)
+
+    merged = {}
+    for ticker, configs in (reported.get("by_company") or {}).items():
+        for config in configs:
+            key = (config["config_id"], config["origin_window"], config["min_train"],
+                   config["min_origins"], config["weight_cap"],
+                   config["baseline_weight_floor"], config["min_improvement"])
+            merged.setdefault(key, (config, []))[1].append(ticker)
+    return [{**config, "_used_by": ", ".join(tickers)}
+            for config, tickers in merged.values()]
+
+
 def _methodology_html():
     """Full description of the active methodology (Methodology 1) for the node modal."""
     M = methodology.METHODOLOGY_1
@@ -389,15 +412,16 @@ def _methodology_html():
     cand = "".join(f"<div class=kv style='align-items:center'><span class=fx><code>{mid}</code>&nbsp; ${lx}$</span>"
                    f"<span class=u>{html.escape(note)}</span></div>"
                    for mid, lx, note in methodology.MODELS_LATEX)
-    configs = selection.nested_bundle()["report"]["candidate_configs"]
     config_grid = "".join(
         _latex_row(
             rf"\theta=({config['origin_window']},{config['min_train']},{config['min_origins']},"
             rf"{config['weight_cap']:.2f},{config['baseline_weight_floor']:.2f},"
             rf"{config['min_improvement']:.2f})",
-            f"{config['config_id']}: window, min train/origins, weight cap, baseline floor, min improvement",
+            f"{config['config_id']}"
+            + (f" · {config['_used_by']}" if config.get("_used_by") else "")
+            + ": window, min train/origins, weight cap, baseline floor, min improvement",
         )
-        for config in configs
+        for config in _candidate_configs()
     )
     btm = "".join(_latex_row(lx, note) for lx, note in methodology.BACKTEST_LATEX)
 
