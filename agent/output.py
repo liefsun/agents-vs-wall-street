@@ -8,8 +8,15 @@ command that produces it for all four companies at once.
 """
 from __future__ import annotations
 
+import datetime
+import os
+
 from . import methodology, selection, workbook
 from .forecast import _companies_json, company_spec
+
+
+def _stamp() -> str:
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 TICKERS = ["HD", "ADI", "HAS", "DE"]
 
@@ -44,6 +51,9 @@ def output_spec() -> dict:
 def run_pipeline(write: bool = False, selection_mode: str = selection.GUARDED_NESTED_MODE) -> dict:
     """Run all four companies through the guarded Methodology 1 pipeline.
     Returns a manifest; if write=True also emits the workbooks to submission/."""
+    started = _stamp()
+    stages = [(started, f"loaded manifest — {len(TICKERS)} companies, "
+                        f"{sum(len(company_spec(t)['metrics']) for t in TICKERS)} target numbers")]
     companies = []
     for t in TICKERS:
         spec = company_spec(t)
@@ -60,14 +70,24 @@ def run_pipeline(write: bool = False, selection_mode: str = selection.GUARDED_NE
                             "selection": mm.get("selection") if mm else None,
                             "direct_point": mm.get("direct_point") if mm else None})
         path = workbook.write_direct(spec["outputFile"], spec["period"], metrics) if write else None
+        proc = _stamp()
+        n_nested = sum(1 for m in metrics if (m.get("selection") or {}).get("source") == "nested")
+        got = sum(1 for m in metrics if m["point"] is not None)
+        stages.append((proc, f"{t}: {got}/{len(metrics)} numbers ({n_nested} nested, "
+                             f"{got - n_nested} direct)" + (f" → wrote {os.path.basename(path)}" if path else "")))
         companies.append({"ticker": t, "company": spec["company"], "period": spec["period"],
                           "file": spec["outputFile"], "wired": bool(d["metrics"]),
-                          "written": path, "metrics": metrics})
+                          "written": path, "processed_at": proc, "metrics": metrics})
     filled = sum(1 for f in companies for m in f["metrics"] if m["point"] is not None)
     total = sum(len(f["metrics"]) for f in companies)
     report_paths = selection.write_nested_report() if write and selection_mode != selection.DIRECT_MODE else None
+    finished = _stamp()
+    if report_paths:
+        stages.append((finished, "wrote nested-parameter-evaluation report"))
+    dur = (datetime.datetime.fromisoformat(finished) - datetime.datetime.fromisoformat(started)).total_seconds()
     manifest = {"companies": companies, "n_filled": filled, "n_total": total,
                 "selection_mode": selection_mode, "nested_report": report_paths,
+                "started_at": started, "finished_at": finished, "duration_s": dur, "stages": stages,
                 "wired": sum(1 for f in companies if f["wired"]),
                 "ready": all(f["wired"] and all(m["point"] is not None for m in f["metrics"])
                              for f in companies)}
