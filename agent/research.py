@@ -197,8 +197,11 @@ def _norm_ws(text: str) -> str:
 
 # Sources state the same figure on different scales: "$41.4 billion", "$ 38,198" in a
 # millions table, "1,456,136" in a thousands table. A reported value is corroborated when
-# some number in the quote matches it under one of these scalings.
-_SCALES = (1.0, 1e-3, 1e3, 1e-6, 1e6, 1e-9, 1e9)
+# some number in the quote matches it under one of these scalings. The set is deliberately
+# limited to the thousands/millions/billions boundaries that actually occur in these filings
+# (×1, ×1000, ×0.001): the wider ±1e6/±1e9 scalings let a value corroborate against a number
+# a billion times different, which defeats the point of the check (audit 2026-08-16).
+_SCALES = (1.0, 1e-3, 1e3)
 _CORROBORATION_TOLERANCE = 0.01
 
 _NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
