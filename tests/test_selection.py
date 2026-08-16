@@ -7,7 +7,13 @@ from agent.selection import selection_decision
 
 class SelectionDecisionTests(unittest.TestCase):
     def test_positive_outer_and_deployment_evidence_enables_nested(self):
-        evidence = {"origins": 3, "skill": 0.10}
+        evidence = {
+            "origins": 3,
+            "mae": 0.9,
+            "baseline_mae": 1.0,
+            "relative_mae": 0.9,
+            "skill": 0.10,
+        }
         recommendation = {
             "point": 101.0,
             "fallback": False,
@@ -18,6 +24,8 @@ class SelectionDecisionTests(unittest.TestCase):
 
         self.assertTrue(decision["use_nested"])
         self.assertEqual(decision["reasons"], [])
+        self.assertEqual(decision["outer_mae"], 0.9)
+        self.assertEqual(decision["baseline_mae"], 1.0)
 
     def test_missing_outer_evidence_keeps_direct_forecast(self):
         recommendation = {

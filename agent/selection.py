@@ -59,6 +59,9 @@ def selection_decision(evidence: dict | None, recommendation: dict | None) -> di
         "use_nested": not reasons,
         "reasons": reasons,
         "outer_origins": evidence.get("origins", 0) if evidence else 0,
+        "outer_mae": evidence.get("mae") if evidence else None,
+        "baseline_mae": evidence.get("baseline_mae") if evidence else None,
+        "relative_mae": evidence.get("relative_mae") if evidence else None,
         "outer_skill": evidence.get("skill") if evidence else None,
     }
 
