@@ -34,18 +34,21 @@ from .corpus import ROOT
 
 NODES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nodes", "models")
 
-# ── the 5 phases: single source of truth for the graph + governance ──
+# ── the 5 layers: single source of truth for the graph + governance ──
+# Input = (company code, required output).  Ingestion → Methodology → Model →
+# Backtesting → Output.  Methodology is its own FIXED layer: it decides HOW the
+# method runs; the Model layer plugs in (hot-swap); Backtesting executes.
 PHASES = [
-    {"id": "P1", "title": "Ingest", "plug": "code",
-     "note": "frozen corpus — filings / transcripts / slides (semi-fixed source adapters)"},
-    {"id": "P2", "title": "Extract", "plug": "hot",
-     "note": "text → period panel: per-company/metric extractors (actuals + issued guidance)"},
-    {"id": "P3", "title": "Candidates", "plug": "hot",
+    {"id": "P1", "title": "Data ingestion", "plug": "code",
+     "note": "frozen corpus → extract → period panel (actuals + issued guidance)"},
+    {"id": "P2", "title": "Methodology", "plug": "no",
+     "note": "loss · gate · point-in-time · backtest window · ensemble · guardrail — decides HOW the method runs"},
+    {"id": "P3", "title": "Model", "plug": "hot",
      "note": "parallel forecaster nodes compete — hot-swap JSON or code producers"},
-    {"id": "P4", "title": "Backtest & Fuse", "plug": "no",
-     "note": "rolling-origin gate vs seasonal-naive + capped inverse-error ensemble — FIXED"},
-    {"id": "P5", "title": "Govern & Emit", "plug": "no",
-     "note": "guardrail band + workbook writer — FIXED / constitutional"},
+    {"id": "P4", "title": "Backtesting", "plug": "no",
+     "note": "rolling-origin executes the methodology → gate + learned ensemble weights + point + band"},
+    {"id": "P5", "title": "Output", "plug": "no",
+     "note": "emit the required workbooks (Summary sheet); one command, all four companies"},
 ]
 PHASE_PLUG = {p["id"]: p["plug"] for p in PHASES}
 
