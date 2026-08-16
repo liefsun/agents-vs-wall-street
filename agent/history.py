@@ -465,8 +465,10 @@ _SERIES_BUILDERS = {
 _SEMIANNUAL_TICKERS = frozenset({"HAS"})
 
 # A researched and a parsed observation for the same period should agree closely. A wide
-# gap means one of them is reading a different row — the exact failure this layer exists
-# to prevent — so neither is trusted for that period.
+# gap means one of them is reading a different row. On disagreement the AGENT value wins
+# (it carries a verbatim quote checked to contain the number; the parser is an unverified
+# pattern match), and the gap is recorded in the returned disagreements list for audit —
+# see cross_check(). The parser only fills periods the agent never returned.
 CROSS_CHECK_TOLERANCE = 0.02
 
 
