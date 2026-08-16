@@ -116,11 +116,11 @@ def index():
         rows += (f"<div class=card><div style='display:flex;justify-content:space-between'>"
                  f"<div>{head}</div><a href='/c/{t}'>detail →</a></div>{cells}</div>")
     phases = "".join(f"<span class=phase>{p}</span>" for p in
-                     ["1 · extract text→panel", "2 · candidate models", "3 · rolling-origin backtest",
-                      "4 · gate vs seasonal-naive", "5 · capped ensemble", "6 · fuse + band", "7 · write xlsx"])
+                     ["1 · extract text→panel", "2 · candidate models", "3 · causal prequential backtest",
+                      "4 · paired baseline gate", "5 · prior-origin weights", "6 · fuse + band", "7 · write xlsx"])
     body = (f"<h1>Agents vs Wall Street — forecasting agent</h1>"
-            f"<div class=sub>Same skeleton as the lab pipeline. Guidance competes as a "
-            f"backtestable candidate; the rolling-origin backtest decides its weight per metric.</div>"
+            f"<div class=sub>Guidance competes as a backtestable candidate. A baseline-only warm-up "
+            f"feeds causal paired evaluation; each origin's ensemble uses errors from earlier origins only.</div>"
             f"<div>{phases}</div><h2>Four companies · twelve metrics</h2>{rows}"
             f"<div class=card><a href='/run'>▶ write the 4 workbooks to submission/</a></div>")
     return Response(_page("Forecasting agent", body), mimetype="text/html")
@@ -158,20 +158,30 @@ def company(ticker):
                    f"<td class=u>{row['origins']}</td></tr>")
         ev = "".join(f"<div class=ev>{html.escape(str(e))}</div>" for e in m.evidence[:3])
         spark = _sparkline(m.series["axis"], m.series["values"])
+        ensemble_error = res.get("ens_error")
+        paired_baseline_error = res.get("ensemble_baseline_error")
+        skill = res.get("ensemble_skill")
+        if ensemble_error is not None and paired_baseline_error is not None and skill is not None:
+            backtest_summary = (
+                f"causal ensemble MAE {ensemble_error:.3f} vs paired baseline "
+                f"{paired_baseline_error:.3f} · skill {skill:.1%} · "
+                f"{res.get('n_ensemble_origins', 0)} adaptive origins"
+            )
+        else:
+            backtest_summary = "baseline-only warm-up; insufficient adaptive origins"
         blocks += (f"<div class=card>"
                    f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
                    f"<div><b>{html.escape(m.label)}</b> <span class=u>{html.escape(m.units)}</span> {anchor}</div>"
                    f"<div><span class=pt>{_fmt(m.point, m.kind)}</span> "
                    f"<span class=band>band {band}</span></div></div>"
-                   f"<div style='margin:8px 0'>{spark} <span class=u>backtest: baseline WAPE/MAE "
-                   f"{res['baseline_error']:.3f} · {res['n_origins']} origins"
+                   f"<div style='margin:8px 0'>{spark} <span class=u>backtest: {backtest_summary}"
                    f"{' · FALLBACK' if res['fallback'] else ''}</span></div>"
-                   f"<table><thead><tr><th>candidate</th><th>bt error</th><th>pred</th>"
+                   f"<table><thead><tr><th>candidate</th><th>paired MAE</th><th>pred</th>"
                    f"<th>weight</th><th>n</th></tr></thead><tbody>{lb}</tbody></table>"
                    f"<div style='margin-top:8px'>{ev}</div></div>")
     body = (f"<h1>{html.escape(fc['company'])} <span class=badge>{html.escape(fc['period'])}</span></h1>"
-            f"<div class=sub>{fc['panel_rows']} periods extracted · fused point = capped inverse-error "
-            f"ensemble of candidates that beat seasonal-naive in the trailing backtest window</div>"
+            f"<div class=sub>{fc['panel_rows']} periods extracted · causal prequential ensemble: "
+            f"baseline-only warm-up, paired seasonal-naive gate, prior-origin inverse-MAE weights</div>"
             f"<a href='/'>← overview</a>{blocks}")
     return Response(_page(fc["company"], body), mimetype="text/html")
 
@@ -284,7 +294,7 @@ def _graph_svg(fc, mf):
         err = row.get("error")
         nodes[mid] = {"t": lab, "plug": plug,
                       "sub": f"P3 · candidate ({'JSON hot-swap' if plug=='hot' and mid!='guidance' else 'guidance' if mid=='guidance' else 'code'})",
-                      "body": (f"backtest error: {err:.4f}<br>ensemble weight: {w:.2f}<br>"
+                      "body": (f"paired MAE: {err:.4f}<br>ensemble weight: {w:.2f}<br>"
                                f"eligible (beat seasonal-naive): {'yes' if elig else 'no'}<br>"
                                f"next-period prediction: {row.get('final_pred')}" if row else "not scored"),
                       "spec": (mnode[mid].spec if mid in mnode and mnode[mid].spec else None),
@@ -293,18 +303,18 @@ def _graph_svg(fc, mf):
     # P4 backtest + ensemble
     bt_x, bt_w = 300, 230
     parts.append(_rect(bt_x, 414, bt_w, 44, "backtest", "#1b222c", "#3a4658",
-                       ["Rolling-origin backtest", "gate vs seasonal-naive · PIT"]))
+                       ["Causal prequential backtest", "paired gate vs seasonal-naive · PIT"]))
     en_x, en_w = 600, 170
     parts.append(_rect(en_x, 414, en_w, 44, "ensemble", "#1b222c", "#3a4658",
-                       ["Capped ensemble", "inverse-error weights"]))
+                       ["Capped ensemble", "prior-origin inverse-MAE weights"]))
     btc = (cx(bt_x, bt_w), 414); bto = (cx(bt_x, bt_w), 458)
-    enc = (cx(en_x, en_w), 414); eno = (cx(en_x, en_w), 458); enl = (en_x, cx(en_x, en_w))
-    nodes["backtest"] = {"t": "Rolling-origin backtest · gate", "plug": "no", "sub": "P4 · FIXED methodology",
-                         "body": "At each trailing origin, fit on data-up-to-then, predict next, score. "
-                                 "Drop any model that can't beat seasonal-naive. Change via code only."}
-    nodes["ensemble"] = {"t": "Capped inverse-error ensemble", "plug": "no", "sub": "P4 · FIXED",
-                         "body": "Survivors weighted by 1/error, capped at 0.60, renormalised. "
-                                 "= the learned weights of this network."}
+    enc = (cx(en_x, en_w), 414); eno = (cx(en_x, en_w), 458)
+    nodes["backtest"] = {"t": "Causal prequential backtest · paired gate", "plug": "no", "sub": "P4 · FIXED methodology",
+                         "body": "At each origin, predict from information available then. Weights use only "
+                                 "earlier completed origins; candidates must beat seasonal-naive on paired rows."}
+    nodes["ensemble"] = {"t": "Capped causal ensemble", "plug": "no", "sub": "P4 · FIXED",
+                         "body": "Six-origin baseline-only warm-up; qualifying candidates use inverse paired "
+                                 "MAE, capped at 0.60, with a 0.20 seasonal-naive floor."}
     # weighted edges model -> backtest
     for mid, (mxb, myb, _, _) in p3c.items():
         row = lb.get(mid, {})
@@ -316,16 +326,16 @@ def _graph_svg(fc, mf):
 
     # P5 govern + emit
     gd_x, gd_w = 320, 170
-    parts.append(_rect(gd_x, 532, gd_w, 40, "guardrail", "#16241b", "#2f6b43", ["Guardrail band", "point ± ens-error"]))
+    parts.append(_rect(gd_x, 532, gd_w, 40, "guardrail", "#16241b", "#2f6b43", ["Diagnostic MAE band", "point ± causal MAE"]))
     wb_x, wb_w = 560, 170
     parts.append(_rect(wb_x, 532, wb_w, 40, "emit", "#16241b", "#2f6b43", ["Workbook (xlsx)", "Summary sheet"]))
     gdc = (cx(gd_x, gd_w), 532)
     parts.append(f'<path d="M{eno[0]},{eno[1]} C{eno[0]},505 {gdc[0]},505 {gdc[0]},532" fill="none" stroke="#3a6b47" stroke-width="2"/>')
     parts.append(f'<path d="M{cx(gd_x,gd_w)},572 C{cx(gd_x,gd_w)},595 {cx(wb_x,wb_w)},595 {cx(wb_x,wb_w)},572" fill="none" stroke="#3a6b47" stroke-width="1.6" stroke-dasharray="0"/>')
     parts.append(f'<line x1="{gd_x+gd_w}" y1="552" x2="{wb_x}" y2="552" stroke="#3a6b47" stroke-width="2"/>')
-    nodes["guardrail"] = {"t": "Guardrail band", "plug": "no", "sub": "P5 · FIXED",
+    nodes["guardrail"] = {"t": "Diagnostic MAE band", "plug": "no", "sub": "P5 · FIXED",
                           "body": f"Point {_fmt(mf.point, mf.kind) if mf and mf.point is not None else '—'} "
-                                  f"± ensemble error → band. Consensus clamp seam (corpus-only for now)."}
+                                  f"± realized causal ensemble MAE. This is diagnostic, not a calibrated interval."}
     nodes["emit"] = {"t": "Workbook writer", "plug": "no", "sub": "P5 · FIXED",
                      "body": f"Writes submission/{fc['output_file']} — fills the Summary sheet, leaves structure intact."}
     parts.append("</svg>")
@@ -383,7 +393,7 @@ def graph():
 
     body = (f"<h1>Governed forecasting graph <span class=badge>{html.escape(fc['company'])}</span></h1>"
             f"<div class=sub>Layered like a network: corpus → extract → parallel candidate nodes → "
-            f"backtest gate (learns weights) → ensemble → workbook. "
+            f"causal paired backtest gate → prior-origin weights → ensemble → workbook. "
             f"Fixed methodology vs hot-swappable research layer.</div>"
             f"<div>Company: {tsel}</div><div style='margin-top:6px'>Metric: {msel}</div>"
             f"{legend}<div class=card style='padding:10px'>{svg}</div>{form}"

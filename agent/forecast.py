@@ -15,7 +15,7 @@ from .backtest import forecast_metric
 from .corpus import ROOT
 
 # challenge metric label -> (internal extractor key, loss kind)
-#   kind: money (WAPE), eps (MAE $), pct (MAE points)
+#   kind controls display/band units; causal backtest selection uses MAE for every metric.
 METRIC_MAP = {
     "ADI": {
         "Revenue": ("revenue", "money"),

@@ -12,7 +12,7 @@ Neural-network framing (what the /graph view draws):
                     ┌───────────────────┼───────────────────┐   ← candidate layer
                  model₁  model₂  …  modelₙ  guidance             (parallel nodes)
                     └───────────────────┼───────────────────┘
-                          rolling-origin backtest (gate: beat seasonal-naive)
+                          causal prequential backtest (paired gate vs seasonal-naive)
                                         │  inverse-error weights (learned)
                                   capped ensemble  ─▶  point + band  ─▶  workbook
 
@@ -43,7 +43,7 @@ PHASES = [
     {"id": "P3", "title": "Candidates", "plug": "hot",
      "note": "parallel forecaster nodes compete — hot-swap JSON or code producers"},
     {"id": "P4", "title": "Backtest & Fuse", "plug": "no",
-     "note": "rolling-origin gate vs seasonal-naive + capped inverse-error ensemble — FIXED"},
+     "note": "causal prequential paired gate + prior-origin capped inverse-MAE ensemble — FIXED"},
     {"id": "P5", "title": "Govern & Emit", "plug": "no",
      "note": "guardrail band + workbook writer — FIXED / constitutional"},
 ]

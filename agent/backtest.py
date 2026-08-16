@@ -1,15 +1,16 @@
-"""Rolling-origin backtest + capped ensemble — ported verbatim in spirit from the
-lab pipeline's forecast_metric, with two additions for this challenge:
+"""Causal walk-forward backtest with a paired seasonal-naive benchmark.
 
-  * `guidance` competes as a candidate model. It is exogenous (the number the
-    company published for the next period), aligned by absolute fiscal key so the
-    backtest stays strictly point-in-time: to "predict" period t we use only the
-    guidance that was issued at t-1.
-  * loss is metric-kind aware: money -> WAPE, eps -> MAE, pct -> MAE (in points).
+Every origin is evaluated causally with respect to the supplied period series:
 
-Gate: any model that cannot beat Seasonal Naive is dropped. Survivors form a
-capped inverse-error ensemble (no model > 60%). If everything fails, fall back to
-the best validated baseline. Deterministic, reproducible, auditable.
+* missing history is filled from past data only;
+* the ensemble at origin ``t`` uses errors observed strictly before ``t``;
+* the first ``MIN_ORIGINS`` origins are a baseline-only warm-up;
+* candidates qualify only by beating seasonal naive on the same origins; and
+* reported ensemble error is the realized walk-forward MAE, not a weighted
+  average of candidate errors.
+
+Guidance remains an exogenous candidate aligned by fiscal target key.  The final
+forecast uses the most recent completed origin window to form its weights.
 """
 from __future__ import annotations
 
@@ -18,153 +19,332 @@ import numpy as np
 from . import governance
 
 WEIGHT_CAP = 0.60
-MIN_TRAIN = 8          # a bit lower than the lab's 12: several metrics have ~20 clean quarters
+BASELINE_WEIGHT_FLOOR = 0.20
+MIN_IMPROVEMENT = 0.05
+MIN_TRAIN = 8
 MIN_ORIGINS = 6
-ORIGIN_WINDOW = 16     # score only the most recent N origins — old history (mega-acquisition
-                       # step-changes: ADI/Linear'17, ADI/Maxim'21) is a different regime and
-                       # would otherwise dominate every model's error and wash out discrimination.
+ORIGIN_WINDOW = 16
+SEASON = 4
 GUIDANCE_KEY = "guidance"
 GUIDANCE_LABEL = "Company guidance (issued t-1)"
 
 
-def _series(axis, values):
-    """Trim to first..last known, linearly interpolate interior gaps (keeps the
-    seasonal t-4 index aligned), return (axis2, y, filled)."""
-    idx = [i for i, v in enumerate(values) if v is not None]
-    if len(idx) < 2:
+def _causal_series(axis, values, season=SEASON):
+    """Trim the series and fill gaps using information available before the gap.
+
+    A missing value uses the value from the same seasonal position when possible,
+    otherwise the last observed/filled value.  Unlike bidirectional interpolation,
+    this rule cannot import a later actual into an earlier forecast origin.
+    """
+    known = [i for i, value in enumerate(values) if value is not None]
+    if len(known) < 2:
         return [], [], []
-    lo, hi = idx[0], idx[-1]
+
+    lo, hi = known[0], known[-1]
     axis2 = axis[lo:hi + 1]
-    seg = values[lo:hi + 1]
-    xs = [i for i, v in enumerate(seg) if v is not None]
-    vs = [float(v) for v in seg if v is not None]
-    y, filled = [], []
-    for i in range(len(seg)):
-        if seg[i] is not None:
-            y.append(float(seg[i])); filled.append(False)
-        else:
-            y.append(float(np.interp(i, xs, vs))); filled.append(True)
-    return axis2, y, filled
+    segment = values[lo:hi + 1]
+    result: list[float] = []
+    filled: list[bool] = []
+
+    for i, value in enumerate(segment):
+        if value is not None:
+            result.append(float(value))
+            filled.append(False)
+            continue
+
+        seasonal_index = i - season
+        replacement = result[seasonal_index] if seasonal_index >= 0 else result[-1]
+        result.append(float(replacement))
+        filled.append(True)
+
+    return axis2, result, filled
 
 
-def _score(pairs, kind):
-    a = np.array([p[0] for p in pairs], float)
-    p = np.array([p[1] for p in pairs], float)
-    if kind == "money":
-        denom = float(np.sum(np.abs(a))) or 1.0
-        return float(np.sum(np.abs(a - p)) / denom)     # WAPE
-    return float(np.mean(np.abs(a - p)))                # MAE (eps / pct-points)
+def _mae(pairs):
+    """Mean absolute error for ``(actual, prediction)`` pairs."""
+    if not pairs:
+        return None
+    return float(np.mean([abs(actual - prediction) for actual, prediction in pairs]))
 
 
-def _cap(w, cap=WEIGHT_CAP):
-    w = dict(w)
-    for _ in range(12):
-        over = {k: v for k, v in w.items() if v > cap + 1e-9}
+def _normalise(weights):
+    total = sum(weights.values())
+    if total <= 0:
+        return {}
+    return {key: value / total for key, value in weights.items()}
+
+
+def _cap(weights, cap=WEIGHT_CAP):
+    """Cap a multi-model allocation and redistribute excess weight."""
+    weights = _normalise(dict(weights))
+    if len(weights) <= 1:
+        return weights
+
+    for _ in range(len(weights) + 2):
+        over = {key: value for key, value in weights.items() if value > cap + 1e-12}
         if not over:
             break
-        excess = sum(v - cap for v in over.values())
-        for k in over:
-            w[k] = cap
-        under = {k: v for k, v in w.items() if k not in over}
-        tot = sum(under.values())
-        if tot <= 0:
+        excess = sum(value - cap for value in over.values())
+        for key in over:
+            weights[key] = cap
+        under = {key: value for key, value in weights.items() if key not in over}
+        under_total = sum(under.values())
+        if under_total <= 0:
             break
-        for k in under:
-            w[k] += excess * under[k] / tot
-    s = sum(w.values())
-    return {k: v / s for k, v in w.items()} if s > 0 else w
+        for key, value in under.items():
+            weights[key] += excess * value / under_total
+
+    return _normalise(weights)
+
+
+def _with_baseline_floor(weights, baseline):
+    """Keep the mandatory benchmark represented after performance weighting."""
+    weights = _normalise(weights)
+    if len(weights) <= 1 or weights.get(baseline, 0.0) >= BASELINE_WEIGHT_FLOOR:
+        return weights
+
+    other_total = sum(value for key, value in weights.items() if key != baseline)
+    if other_total <= 0:
+        return {baseline: 1.0}
+    scale = (1.0 - BASELINE_WEIGHT_FLOOR) / other_total
+    adjusted = {
+        key: BASELINE_WEIGHT_FLOOR if key == baseline else value * scale
+        for key, value in weights.items()
+    }
+    return _normalise(adjusted)
+
+
+def _paired_stats(history, candidate, baseline):
+    """Score a candidate and baseline on their common forecast origins."""
+    paired = []
+    for row in history:
+        predictions = row["predictions"]
+        candidate_prediction = predictions.get(candidate)
+        baseline_prediction = predictions.get(baseline)
+        if candidate_prediction is None or baseline_prediction is None:
+            continue
+        paired.append((row["actual"], candidate_prediction, baseline_prediction))
+
+    candidate_error = _mae([(actual, prediction) for actual, prediction, _ in paired])
+    baseline_error = _mae([(actual, prediction) for actual, _, prediction in paired])
+    skill = None
+    if candidate_error is not None and baseline_error is not None:
+        if baseline_error > 0:
+            skill = 1.0 - candidate_error / baseline_error
+        else:
+            skill = 0.0 if candidate_error == 0 else None
+
+    eligible = (
+        len(paired) >= MIN_ORIGINS
+        and baseline_error is not None
+        and baseline_error > 0
+        and candidate_error <= baseline_error * (1.0 - MIN_IMPROVEMENT)
+    )
+    return {
+        "error": candidate_error,
+        "paired_baseline_error": baseline_error,
+        "skill": skill,
+        "origins": len(paired),
+        "eligible": eligible,
+    }
+
+
+def _baseline_stats(history, baseline):
+    pairs = [
+        (row["actual"], row["predictions"][baseline])
+        for row in history
+        if row["predictions"].get(baseline) is not None
+    ]
+    error = _mae(pairs)
+    return {
+        "error": error,
+        "paired_baseline_error": error,
+        "skill": 0.0 if error is not None else None,
+        "origins": len(pairs),
+        "eligible": bool(pairs),
+    }
+
+
+def _weights_from_history(history, candidate_ids, baseline):
+    """Learn weights from completed origins only.
+
+    Candidate inverse-error weights use paired relative MAE, which keeps a model
+    with sparse predictions comparable to seasonal naive on exactly the same rows.
+    """
+    stats = {baseline: _baseline_stats(history, baseline)}
+    for candidate in candidate_ids:
+        if candidate != baseline:
+            stats[candidate] = _paired_stats(history, candidate, baseline)
+
+    if stats[baseline]["origins"] < MIN_ORIGINS:
+        return {baseline: 1.0}, stats, False
+
+    raw = {baseline: 1.0}
+    for candidate in candidate_ids:
+        if candidate == baseline or not stats[candidate]["eligible"]:
+            continue
+        candidate_error = stats[candidate]["error"]
+        paired_baseline_error = stats[candidate]["paired_baseline_error"]
+        relative_error = candidate_error / paired_baseline_error
+        raw[candidate] = 1.0 / max(relative_error, 1e-9)
+
+    weights = _with_baseline_floor(_cap(raw), baseline)
+    return weights, stats, True
+
+
+def _available_weights(weights, predictions, baseline):
+    available = {
+        key: weight
+        for key, weight in weights.items()
+        if predictions.get(key) is not None and np.isfinite(predictions[key])
+    }
+    if not available and predictions.get(baseline) is not None:
+        return {baseline: 1.0}
+    return _normalise(available)
+
+
+def _ensemble_prediction(predictions, weights):
+    if not weights:
+        return None
+    return float(sum(weights[key] * predictions[key] for key in weights))
 
 
 def forecast_metric(axis, values, kind, guidance_by_key=None, models=None):
-    """Backtest every candidate on the series, gate + capped ensemble, next-period point.
+    """Backtest candidates causally, then forecast the next period.
 
-    axis: absolute fiscal keys ; values: aligned actuals (None where missing).
-    kind: 'money' | 'eps' | 'pct'. guidance_by_key: {target_key: issued_value}.
-    models: list of governance.ModelNode (defaults to the active registry for this kind),
-            so hot-swapped JSON nodes compete automatically.
+    The returned payload preserves the original UI contract while adding an
+    ``origin_audit`` trail and realized ensemble diagnostics.
     """
     guidance_by_key = guidance_by_key or {}
     models = models if models is not None else governance.active_models(kind)
-    mmap = {m.id: m for m in models}
-    BASELINE = governance.BASELINE
-    axis2, y, filled = _series(axis, values)
-    if len(y) < MIN_TRAIN + 1:
-        return {"kind": kind, "point": None, "insufficient": True, "n_used": len(y)}
+    model_map = {model.id: model for model in models}
+    baseline = governance.BASELINE
+    if baseline not in model_map:
+        raise ValueError(f"models must include mandatory baseline '{baseline}'")
 
-    errs = {m.id: [] for m in models}
-    errs[GUIDANCE_KEY] = []
-    start = max(MIN_TRAIN, len(y) - ORIGIN_WINDOW)      # trailing scoring window (current regime)
-    for t in range(start, len(y)):
-        if filled[t]:                                   # never score against an interpolated actual
+    axis2, series, filled = _causal_series(axis, values)
+    if len(series) < MIN_TRAIN + 1:
+        return {"kind": kind, "point": None, "insufficient": True, "n_used": len(series)}
+
+    candidate_ids = [model.id for model in models] + [GUIDANCE_KEY]
+    origin_audit = []
+    for index in range(MIN_TRAIN, len(series)):
+        if filled[index]:
             continue
-        train, actual, tkey = y[:t], y[t], axis2[t]
-        for m in models:
-            p = m.predict(train)
-            if p is not None and np.isfinite(p):
-                errs[m.id].append((actual, p))
-        g = guidance_by_key.get(tkey)
-        if g is not None and np.isfinite(g):
-            errs[GUIDANCE_KEY].append((actual, float(g)))
 
-    counts = {k: len(v) for k, v in errs.items()}
-    scores = {k: (_score(v, kind) if v else None) for k, v in errs.items()}
-    naive_err = scores.get(BASELINE)
+        train = series[:index]
+        actual = series[index]
+        target_key = axis2[index]
+        predictions = {}
+        for model in models:
+            prediction = model.predict(train)
+            if prediction is not None and np.isfinite(prediction):
+                predictions[model.id] = float(prediction)
 
-    survivors = {k: s for k, s in scores.items()
-                 if s is not None and counts[k] >= MIN_ORIGINS
-                 and (naive_err is None or s <= naive_err * 1.0001)}
-    fallback = not survivors
-    if fallback:
-        survivors = {BASELINE: naive_err} if naive_err is not None else {}
-    inv = {k: 1.0 / max(s, 1e-9) for k, s in survivors.items()}
-    tot = sum(inv.values()) or 1.0
-    weights = _cap({k: v / tot for k, v in inv.items()})
+        guidance = guidance_by_key.get(target_key)
+        if guidance is not None and np.isfinite(guidance):
+            predictions[GUIDANCE_KEY] = float(guidance)
+        if predictions.get(baseline) is None:
+            continue
 
-    # ── final point: predict the next period after the last actual ──
+        history = origin_audit[-ORIGIN_WINDOW:]
+        planned_weights, _, ready = _weights_from_history(history, candidate_ids, baseline)
+        weights = _available_weights(planned_weights, predictions, baseline)
+        ensemble_prediction = _ensemble_prediction(predictions, weights)
+        origin_audit.append({
+            "target_key": target_key,
+            "actual": actual,
+            "predictions": predictions,
+            "weights": weights,
+            "ensemble_prediction": ensemble_prediction,
+            "ensemble_error": abs(actual - ensemble_prediction),
+            "baseline_error": abs(actual - predictions[baseline]),
+            "phase": "adaptive" if ready else "warmup",
+        })
+
+    history = origin_audit[-ORIGIN_WINDOW:]
+    planned_weights, stats, ready = _weights_from_history(history, candidate_ids, baseline)
+
     target_key = axis2[-1] + 1
-    final_pred = {}
-    for m in models:
-        pv = m.predict(y)
-        if pv is not None and np.isfinite(pv):
-            final_pred[m.id] = float(pv)
-    gfin = guidance_by_key.get(target_key)
-    if gfin is not None and np.isfinite(gfin):
-        final_pred[GUIDANCE_KEY] = float(gfin)
+    final_predictions = {}
+    for model in models:
+        prediction = model.predict(series)
+        if prediction is not None and np.isfinite(prediction):
+            final_predictions[model.id] = float(prediction)
+    final_guidance = guidance_by_key.get(target_key)
+    if final_guidance is not None and np.isfinite(final_guidance):
+        final_predictions[GUIDANCE_KEY] = float(final_guidance)
 
-    point, ens_err = None, None
-    if weights:
-        num, wsum = 0.0, 0.0
-        for k, w in weights.items():
-            pv = final_pred.get(k)
-            if pv is None:
-                pv = final_pred.get(BASELINE)
-            if pv is not None:
-                num += w * pv; wsum += w
-        if wsum > 0:
-            point = num / wsum
-            ens_err = sum(weights[k] * scores[k] for k in weights if scores.get(k) is not None)
+    weights = _available_weights(planned_weights, final_predictions, baseline)
+    point = _ensemble_prediction(final_predictions, weights)
+
+    evaluation_rows = [row for row in origin_audit if row["phase"] == "adaptive"][-ORIGIN_WINDOW:]
+    ensemble_error = _mae([
+        (row["actual"], row["ensemble_prediction"])
+        for row in evaluation_rows
+    ])
+    ensemble_baseline_error = _mae([
+        (row["actual"], row["predictions"][baseline])
+        for row in evaluation_rows
+    ])
+    ensemble_skill = None
+    if ensemble_error is not None and ensemble_baseline_error:
+        ensemble_skill = 1.0 - ensemble_error / ensemble_baseline_error
 
     band = None
-    if point is not None and ens_err is not None:
-        band = (point * (1 - ens_err), point * (1 + ens_err)) if kind == "money" else (point - ens_err, point + ens_err)
+    if point is not None and ensemble_error is not None:
+        band = (point - ensemble_error, point + ensemble_error)
 
-    def _lbl(k):
-        if k == GUIDANCE_KEY:
+    def label(model_id):
+        if model_id == GUIDANCE_KEY:
             return GUIDANCE_LABEL
-        return mmap[k].label if k in mmap else k
+        return model_map[model_id].label if model_id in model_map else model_id
 
-    def _plug(k):
-        if k == GUIDANCE_KEY:
+    def plug(model_id):
+        if model_id == GUIDANCE_KEY:
             return "hot"
-        return mmap[k].plug if k in mmap else "code"
+        return model_map[model_id].plug if model_id in model_map else "code"
 
-    leaderboard = [{"model": k, "label": _lbl(k), "plug": _plug(k), "error": scores[k],
-                    "origins": counts[k], "eligible": k in survivors,
-                    "weight": round(weights.get(k, 0.0), 3), "final_pred": final_pred.get(k)}
-                   for k in [m.id for m in models] + [GUIDANCE_KEY]]
-    leaderboard.sort(key=lambda r: (r["error"] is None, r["error"] if r["error"] is not None else 9e9))
+    leaderboard = []
+    for model_id in candidate_ids:
+        row_stats = stats.get(model_id, {
+            "error": None,
+            "paired_baseline_error": None,
+            "skill": None,
+            "origins": 0,
+            "eligible": False,
+        })
+        leaderboard.append({
+            "model": model_id,
+            "label": label(model_id),
+            "plug": plug(model_id),
+            **row_stats,
+            "weight": round(weights.get(model_id, 0.0), 3),
+            "final_pred": final_predictions.get(model_id),
+        })
+    leaderboard.sort(key=lambda row: (
+        row["error"] is None,
+        row["error"] if row["error"] is not None else float("inf"),
+    ))
 
-    return {"kind": kind, "point": point, "band": band, "ens_error": ens_err,
-            "baseline_error": naive_err, "weights": weights, "leaderboard": leaderboard,
-            "n_used": len(y), "n_origins": max(counts.values()) if counts else 0,
-            "target_key": target_key, "fallback": fallback, "insufficient": False}
+    baseline_error = stats[baseline]["error"]
+    return {
+        "kind": kind,
+        "loss": "MAE",
+        "point": point,
+        "band": band,
+        "ens_error": ensemble_error,
+        "ensemble_baseline_error": ensemble_baseline_error,
+        "ensemble_skill": ensemble_skill,
+        "baseline_error": baseline_error,
+        "weights": weights,
+        "leaderboard": leaderboard,
+        "origin_audit": origin_audit,
+        "n_used": len(series),
+        "n_origins": max((item["origins"] for item in stats.values()), default=0),
+        "n_ensemble_origins": len(evaluation_rows),
+        "target_key": target_key,
+        "fallback": not ready or set(weights) == {baseline},
+        "insufficient": False,
+        "imputed_periods": [key for key, was_filled in zip(axis2, filled) if was_filled],
+    }
