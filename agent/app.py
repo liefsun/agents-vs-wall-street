@@ -276,7 +276,7 @@ def _methodology_html():
          "<b class=u>Flow</b><div class=u style='margin:4px 0 8px'>" +
          " → ".join(html.escape(s) for s in M["flow"]) + "</div>" +
          "<b class=u>Data priority</b>" + ul(M["data"]["priority"]) +
-         "<b class=u>Baseline — current form (backtesting deferred)</b>"
+         "<b class=u>Baseline — direct-output form (portfolio-wide backtesting deferred)</b>"
          f"<div class=u style='margin:4px 0'>{html.escape(M['baseline']['formula'])}</div>"
          f"<div class=u style='margin:0 0 8px'>allowed: {', '.join(M['baseline']['allowed'])}; "
          f"forbidden: {html.escape(M['baseline']['forbidden'])}</div>"
@@ -540,7 +540,7 @@ def _approach_html(aid):
 def _combined_svg(manifest, spec):
     """One combined network graph (current form): four companies → ingestion →
     Methodology 1 → the model approaches Methodology 1 OWNS → stats control →
-    output. The deferred candidate/backtest/ensemble nodes are removed."""
+    output. Candidate/backtest/ensemble nodes are shown separately on the ADI detail view."""
     W, H = 1060, 700
     parts = [f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:1060px">']
     nodes = {}
@@ -555,7 +555,7 @@ def _combined_svg(manifest, spec):
     band("INPUT · four companies", 30, "company code + required output", "#6b7480")
     band("P1 · DATA INGESTION", 122, "corpus → extract → panel", "#6aa0ff")
     band("P2 · METHODOLOGY 1", 258, "fixed — decides HOW and owns the model approaches", "#8b93a1")
-    band("P3 · MODEL APPROACHES", 350, "owned by Methodology 1 (backtesting deferred)", "#f0b768")
+    band("P3 · MODEL APPROACHES", 350, "owned by Methodology 1 (portfolio-wide backtesting deferred)", "#f0b768")
     band("P4 · STATS CONTROL", 458, "validate each number after the approaches", "#8b93a1")
     band("P5 · OUTPUT LAYER", 530, "4 workbooks · 12 numbers", "#3fb950")
 
@@ -610,7 +610,7 @@ def _combined_svg(manifest, spec):
         nodes[aid] = {"t": f"{t} — model approach", "plug": "hot",
                       "sub": "P3 · owned by Methodology 1 · formulas ↓", "body": _approach_html(aid)}
 
-    # P4 stats control — validate the produced numbers (backtesting deferred)
+    # P4 stats control — validates the direct-output path; ADI backtesting is separate
     parts.append(f'<line x1="530" y1="444" x2="530" y2="470" stroke="#3a4658" stroke-width="1.4"/>')
     parts.append(_rect(360, 470, 340, 38, "stats_control", "#1b222c", "#3a4658",
                        ["Stats control · validate", "finite · range · sign · band — §11 checks"]))

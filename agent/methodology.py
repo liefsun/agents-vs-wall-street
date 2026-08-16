@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 # ── Methodology 1: the full, agent-readable specification ─────────────────────────
 METHODOLOGY_1 = {
     "id": "methodology-1",
@@ -74,8 +73,11 @@ METHODOLOGY_1 = {
         "historical actuals for the 12 target metrics + revenue/margin/operating-profit/tax/shares",
         "YoY and QoQ, same-quarter seasonality, management guidance history, guidance-vs-actual error, key drivers",
         "never mix money / percentages / EPS",
-        "transforms: revenue/net-fees in log-level or growth; percentages in points or logit; "
-        "operating profit via revenue×margin; EPS via after-tax profit ÷ shares (never a blind independent series)",
+        (
+            "transforms: revenue/net-fees in log-level or growth; percentages in points or logit; "
+            "operating profit via revenue×margin; EPS via after-tax profit ÷ shares "
+            "(never a blind independent series)"
+        ),
     ],
     "baseline": {
         "formula": "next = seasonal anchor + recent-trend adjustment + guidance calibration + company operating adjustment",
@@ -240,7 +242,7 @@ class Methodology:
     baseline: str = "seasonal_naive"
 
     loss: dict = field(default_factory=lambda: {
-        "money": "WAPE = Σ|a−p| / Σ|a|", "eps": "MAE = mean|a−p| ($/share)",
+        "money": "MAE in reporting units", "eps": "MAE in $/share or pence/share",
         "pct": "MAE in percentage points"})
     gate: str = "a candidate must beat Seasonal Naive by at least 5% on paired origins or it is dropped"
     pit: str = "point-in-time: at each origin fit only on data available then; guidance only if issued before the target"
@@ -248,7 +250,7 @@ class Methodology:
     guardrail: str = "point ± realized causal ensemble MAE (diagnostic band, not a calibrated interval)"
 
     def loss_kind(self, kind: str) -> str:
-        return "wape" if kind == "money" else "mae"
+        return "mae"
 
     def summary(self) -> dict:
         return {

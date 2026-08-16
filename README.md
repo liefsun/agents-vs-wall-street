@@ -68,6 +68,25 @@ less research/HD.md
 
 Use `HD`, `ADI`, `HAS` or `DE` for the four challenge companies. The output contains search leads rather than verified financial history, so check each figure in its cited document. Read [starter/README.md](starter/README.md) for narrower searches and testing instructions.
 
+## Causal backtest parameter evaluation
+
+The structured ADI panel supports a nested causal walk-forward evaluation of the
+backtest policy. Inner selection uses only earlier common paired origins; the
+outer window remains unseen until each configuration has been selected. MAE is
+the within-metric loss, and median relative MAE versus seasonal-naive is the
+cross-metric score.
+
+```bash
+uv run --with-requirements agent/requirements.txt \
+  python -m agent.parameter_evaluation \
+  --markdown reports/backtest-parameter-evaluation.md
+```
+
+See the generated [parameter evaluation report](reports/backtest-parameter-evaluation.md).
+It is sensitivity evidence for ADI, not a portfolio-wide optimality claim; the
+other companies still need structured historical panels before parameters can be
+validated across the full portfolio.
+
 ## Repository map
 
 ```text

@@ -14,22 +14,70 @@ forecast uses the most recent completed origin window to form its weights.
 """
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+
 import numpy as np
 
 from . import governance
 from .methodology import METHOD
 
-# The BACKTESTING layer reads its parameters from the METHODOLOGY layer (the control
-# plane). Change the method there, not here. Aliased for readability below.
-WEIGHT_CAP = METHOD.weight_cap
-BASELINE_WEIGHT_FLOOR = METHOD.baseline_weight_floor
-MIN_IMPROVEMENT = METHOD.min_improvement
-MIN_TRAIN = METHOD.min_train
-MIN_ORIGINS = METHOD.min_origins
-ORIGIN_WINDOW = METHOD.origin_window     # trailing window dodges regime/acquisition step-changes
-SEASON = METHOD.season
 GUIDANCE_KEY = "guidance"
 GUIDANCE_LABEL = "Company guidance (issued t-1)"
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestConfig:
+    """Immutable policy for one causal backtest run.
+
+    ``config_id`` is report metadata. The remaining fields change forecast
+    behavior and are therefore selected only inside a nested causal evaluation.
+    """
+
+    config_id: str = "current"
+    origin_window: int = METHOD.origin_window
+    min_train: int = METHOD.min_train
+    min_origins: int = METHOD.min_origins
+    weight_cap: float = METHOD.weight_cap
+    baseline_weight_floor: float = METHOD.baseline_weight_floor
+    min_improvement: float = METHOD.min_improvement
+    season: int = METHOD.season
+    baseline: str = METHOD.baseline
+
+    def __post_init__(self):
+        if not self.config_id.strip():
+            raise ValueError("config_id must be non-empty")
+        if self.season < 1:
+            raise ValueError("season must be at least 1")
+        if self.min_train < self.season:
+            raise ValueError("min_train must be at least season")
+        if self.min_origins < 1:
+            raise ValueError("min_origins must be at least 1")
+        if self.origin_window < self.min_origins:
+            raise ValueError("origin_window must be at least min_origins")
+        if not 0.0 < self.weight_cap <= 1.0:
+            raise ValueError("weight_cap must be greater than 0 and at most 1")
+        if not 0.0 <= self.baseline_weight_floor <= 1.0:
+            raise ValueError("baseline_weight_floor must be between 0 and 1")
+        if not 0.0 <= self.min_improvement < 1.0:
+            raise ValueError("min_improvement must be between 0 and 1")
+        if not self.baseline.strip():
+            raise ValueError("baseline must be non-empty")
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+DEFAULT_BACKTEST_CONFIG = BacktestConfig()
+
+# Compatibility aliases for callers that displayed these values before config
+# injection. Forecast logic below reads the explicit config object instead.
+WEIGHT_CAP = DEFAULT_BACKTEST_CONFIG.weight_cap
+BASELINE_WEIGHT_FLOOR = DEFAULT_BACKTEST_CONFIG.baseline_weight_floor
+MIN_IMPROVEMENT = DEFAULT_BACKTEST_CONFIG.min_improvement
+MIN_TRAIN = DEFAULT_BACKTEST_CONFIG.min_train
+MIN_ORIGINS = DEFAULT_BACKTEST_CONFIG.min_origins
+ORIGIN_WINDOW = DEFAULT_BACKTEST_CONFIG.origin_window
+SEASON = DEFAULT_BACKTEST_CONFIG.season
 
 
 def _causal_series(axis, values, season=SEASON):
@@ -82,6 +130,7 @@ def _cap(weights, cap=WEIGHT_CAP):
     weights = _normalise(dict(weights))
     if len(weights) <= 1:
         return weights
+    cap = max(cap, 1.0 / len(weights))
 
     for _ in range(len(weights) + 2):
         over = {key: value for key, value in weights.items() if value > cap + 1e-12}
@@ -100,24 +149,24 @@ def _cap(weights, cap=WEIGHT_CAP):
     return _normalise(weights)
 
 
-def _with_baseline_floor(weights, baseline):
+def _with_baseline_floor(weights, baseline, floor=BASELINE_WEIGHT_FLOOR):
     """Keep the mandatory benchmark represented after performance weighting."""
     weights = _normalise(weights)
-    if len(weights) <= 1 or weights.get(baseline, 0.0) >= BASELINE_WEIGHT_FLOOR:
+    if len(weights) <= 1 or weights.get(baseline, 0.0) >= floor:
         return weights
 
     other_total = sum(value for key, value in weights.items() if key != baseline)
     if other_total <= 0:
         return {baseline: 1.0}
-    scale = (1.0 - BASELINE_WEIGHT_FLOOR) / other_total
+    scale = (1.0 - floor) / other_total
     adjusted = {
-        key: BASELINE_WEIGHT_FLOOR if key == baseline else value * scale
+        key: floor if key == baseline else value * scale
         for key, value in weights.items()
     }
     return _normalise(adjusted)
 
 
-def _paired_stats(history, candidate, baseline):
+def _paired_stats(history, candidate, baseline, config=DEFAULT_BACKTEST_CONFIG):
     """Score a candidate and baseline on their common forecast origins."""
     paired = []
     for row in history:
@@ -138,10 +187,10 @@ def _paired_stats(history, candidate, baseline):
             skill = 0.0 if candidate_error == 0 else None
 
     eligible = (
-        len(paired) >= MIN_ORIGINS
+        len(paired) >= config.min_origins
         and baseline_error is not None
         and baseline_error > 0
-        and candidate_error <= baseline_error * (1.0 - MIN_IMPROVEMENT)
+        and candidate_error <= baseline_error * (1.0 - config.min_improvement)
     )
     return {
         "error": candidate_error,
@@ -168,7 +217,12 @@ def _baseline_stats(history, baseline):
     }
 
 
-def _weights_from_history(history, candidate_ids, baseline):
+def _weights_from_history(
+    history,
+    candidate_ids,
+    baseline,
+    config=DEFAULT_BACKTEST_CONFIG,
+):
     """Learn weights from completed origins only.
 
     Candidate inverse-error weights use paired relative MAE, which keeps a model
@@ -177,9 +231,9 @@ def _weights_from_history(history, candidate_ids, baseline):
     stats = {baseline: _baseline_stats(history, baseline)}
     for candidate in candidate_ids:
         if candidate != baseline:
-            stats[candidate] = _paired_stats(history, candidate, baseline)
+            stats[candidate] = _paired_stats(history, candidate, baseline, config)
 
-    if stats[baseline]["origins"] < MIN_ORIGINS:
+    if stats[baseline]["origins"] < config.min_origins:
         return {baseline: 1.0}, stats, False
 
     raw = {baseline: 1.0}
@@ -191,7 +245,11 @@ def _weights_from_history(history, candidate_ids, baseline):
         relative_error = candidate_error / paired_baseline_error
         raw[candidate] = 1.0 / max(relative_error, 1e-9)
 
-    weights = _with_baseline_floor(_cap(raw), baseline)
+    weights = _with_baseline_floor(
+        _cap(raw, config.weight_cap),
+        baseline,
+        config.baseline_weight_floor,
+    )
     return weights, stats, True
 
 
@@ -212,26 +270,40 @@ def _ensemble_prediction(predictions, weights):
     return float(sum(weights[key] * predictions[key] for key in weights))
 
 
-def forecast_metric(axis, values, kind, guidance_by_key=None, models=None):
+def forecast_metric(
+    axis,
+    values,
+    kind,
+    guidance_by_key=None,
+    models=None,
+    config=None,
+):
     """Backtest candidates causally, then forecast the next period.
 
     The returned payload preserves the original UI contract while adding an
     ``origin_audit`` trail and realized ensemble diagnostics.
     """
+    config = config or DEFAULT_BACKTEST_CONFIG
     guidance_by_key = guidance_by_key or {}
     models = models if models is not None else governance.active_models(kind)
     model_map = {model.id: model for model in models}
-    baseline = governance.BASELINE
+    baseline = config.baseline
     if baseline not in model_map:
         raise ValueError(f"models must include mandatory baseline '{baseline}'")
 
-    axis2, series, filled = _causal_series(axis, values)
-    if len(series) < MIN_TRAIN + 1:
-        return {"kind": kind, "point": None, "insufficient": True, "n_used": len(series)}
+    axis2, series, filled = _causal_series(axis, values, config.season)
+    if len(series) < config.min_train + 1:
+        return {
+            "kind": kind,
+            "point": None,
+            "insufficient": True,
+            "n_used": len(series),
+            "backtest_config": config.to_dict(),
+        }
 
     candidate_ids = [model.id for model in models] + [GUIDANCE_KEY]
     origin_audit = []
-    for index in range(MIN_TRAIN, len(series)):
+    for index in range(config.min_train, len(series)):
         if filled[index]:
             continue
 
@@ -250,8 +322,13 @@ def forecast_metric(axis, values, kind, guidance_by_key=None, models=None):
         if predictions.get(baseline) is None:
             continue
 
-        history = origin_audit[-ORIGIN_WINDOW:]
-        planned_weights, _, ready = _weights_from_history(history, candidate_ids, baseline)
+        history = origin_audit[-config.origin_window:]
+        planned_weights, _, ready = _weights_from_history(
+            history,
+            candidate_ids,
+            baseline,
+            config,
+        )
         weights = _available_weights(planned_weights, predictions, baseline)
         ensemble_prediction = _ensemble_prediction(predictions, weights)
         origin_audit.append({
@@ -265,8 +342,13 @@ def forecast_metric(axis, values, kind, guidance_by_key=None, models=None):
             "phase": "adaptive" if ready else "warmup",
         })
 
-    history = origin_audit[-ORIGIN_WINDOW:]
-    planned_weights, stats, ready = _weights_from_history(history, candidate_ids, baseline)
+    history = origin_audit[-config.origin_window:]
+    planned_weights, stats, ready = _weights_from_history(
+        history,
+        candidate_ids,
+        baseline,
+        config,
+    )
 
     target_key = axis2[-1] + 1
     final_predictions = {}
@@ -281,7 +363,9 @@ def forecast_metric(axis, values, kind, guidance_by_key=None, models=None):
     weights = _available_weights(planned_weights, final_predictions, baseline)
     point = _ensemble_prediction(final_predictions, weights)
 
-    evaluation_rows = [row for row in origin_audit if row["phase"] == "adaptive"][-ORIGIN_WINDOW:]
+    evaluation_rows = [
+        row for row in origin_audit if row["phase"] == "adaptive"
+    ][-config.origin_window:]
     ensemble_error = _mae([
         (row["actual"], row["ensemble_prediction"])
         for row in evaluation_rows
@@ -334,6 +418,7 @@ def forecast_metric(axis, values, kind, guidance_by_key=None, models=None):
     return {
         "kind": kind,
         "loss": "MAE",
+        "backtest_config": config.to_dict(),
         "point": point,
         "band": band,
         "ens_error": ensemble_error,

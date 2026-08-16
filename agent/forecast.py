@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass, field
 
 from . import extract
-from .backtest import forecast_metric
+from .backtest import BacktestConfig, forecast_metric
 from .corpus import ROOT
 
 # challenge metric label -> (internal extractor key, loss kind)
@@ -62,7 +62,7 @@ def _guidance_by_key(panel, internal_metric) -> dict:
     return out
 
 
-def forecast_company(ticker: str) -> dict:
+def forecast_company(ticker: str, config: BacktestConfig | None = None) -> dict:
     spec = company_spec(ticker)
     panel = extract.build_panel(ticker)
     mmap = METRIC_MAP.get(ticker, {})
@@ -76,7 +76,7 @@ def forecast_company(ticker: str) -> dict:
             continue
         axis, vals = extract.metric_series(panel, internal)
         gbk = _guidance_by_key(panel, internal)
-        res = forecast_metric(axis, vals, kind, gbk)
+        res = forecast_metric(axis, vals, kind, gbk, config=config)
         anchor = gbk.get(res.get("target_key")) if not res.get("insufficient") else None
         ev = [r.evidence.get(f"actual.{internal}") for r in panel[-4:] if r.evidence.get(f"actual.{internal}")]
         metrics.append(MetricForecast(
