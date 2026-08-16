@@ -1,0 +1,547 @@
+{
+  "generated_at": "2026-08-16T17:58:50+01:00",
+  "commit": "6787ba6793",
+  "branch": "main",
+  "started_at": "2026-08-16T17:58:33+01:00",
+  "finished_at": "2026-08-16T17:58:46+01:00",
+  "duration_s": 13.0,
+  "n_filled": 12,
+  "n_total": 12,
+  "companies": [
+    {
+      "ticker": "HD",
+      "company": "Home Depot",
+      "period": "FY2026Q2",
+      "file": "HD-FY2026Q2.xlsx",
+      "wired": true,
+      "written": "D:\\OneDrive\\数桥咨询\\DB_models\\Openstocks\\agents-vs-wall-street-starter-main\\submission\\HD-FY2026Q2.xlsx",
+      "processed_at": "2026-08-16T17:58:41+01:00",
+      "metrics": [
+        {
+          "label": "Net sales",
+          "units": "USDm",
+          "point": 45892.4565861613,
+          "kind": "money",
+          "band": [
+            44388.52067472753,
+            47396.39249759507
+          ],
+          "basis": "nested causal ensemble (strict config); outer skill 24.9% across 8 unseen origins; direct cross-check 46886.0",
+          "sources": [
+            "2026-05-19__hd-us-20260519-q1-8k__1038584.md: total sales growth 2.5–4.5%",
+            "HD FY2025 Q2 8-K net sales",
+            "Nested causal prequential evaluation; paired seasonal-naive baseline"
+          ],
+          "selection": {
+            "source": "nested",
+            "use_nested": true,
+            "reasons": [],
+            "outer_origins": 8,
+            "outer_mae": 1667.8365474562888,
+            "baseline_mae": 2221.75,
+            "relative_mae": 0.7506859671233437,
+            "outer_skill": 0.24931403287665632,
+            "config_id": "strict"
+          },
+          "direct_point": 46886.0,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 47608.63899599334,
+            "m2_skill": -0.0030263278933815307,
+            "m1_skill": 0.24931403287665632,
+            "m2_origins": 24,
+            "reason": "M2 skill -0.00 below the 0.15 meaningful-skill bar"
+          }
+        },
+        {
+          "label": "Adjusted diluted EPS",
+          "units": "USD / share",
+          "point": 4.51,
+          "kind": "eps",
+          "band": [
+            4.39,
+            4.63
+          ],
+          "basis": "PY Q2 4.68 × (1+-3.7% latest-YoY)",
+          "sources": [
+            "HD FY2025 Q2 adj EPS",
+            "HD Q1 FY2026 vs FY2025 adj EPS"
+          ],
+          "selection": {
+            "source": "direct",
+            "use_nested": false,
+            "reasons": [
+              "no nested outer evidence",
+              "no deployment forecast"
+            ],
+            "outer_origins": 0,
+            "outer_mae": null,
+            "baseline_mae": null,
+            "relative_mae": null,
+            "outer_skill": null,
+            "config_id": null
+          },
+          "direct_point": 4.51,
+          "m2_decision": {
+            "use_m2": false,
+            "reason": "M2 backtest insufficient (too few analogue origins)"
+          }
+        },
+        {
+          "label": "Comparable sales, total company",
+          "units": "%",
+          "point": 0.8437329119910165,
+          "kind": "pct",
+          "band": [
+            -1.6780243883577906,
+            3.365490212339824
+          ],
+          "basis": "nested causal ensemble (strict config); outer skill 37.9% across 8 unseen origins; direct cross-check 0.84",
+          "sources": [
+            "2026-05-19__hd-us-20260519-q1-8k__1038584.md: comparable sales flat to 2.0%",
+            "HD Q1 FY2026 comparable sales",
+            "Nested causal prequential evaluation; paired seasonal-naive baseline"
+          ],
+          "selection": {
+            "source": "nested",
+            "use_nested": true,
+            "reasons": [],
+            "outer_origins": 8,
+            "outer_mae": 1.320024102676391,
+            "baseline_mae": 2.125,
+            "relative_mae": 0.621187813024184,
+            "outer_skill": 0.378812186975816,
+            "config_id": "strict"
+          },
+          "direct_point": 0.84,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 0.06886261694908624,
+            "m2_skill": 0.30327478921719864,
+            "m1_skill": 0.378812186975816,
+            "m2_origins": 22,
+            "reason": "M2 skill +0.30 does not beat guarded-nested M1 +0.38 by ≥5%"
+          }
+        }
+      ],
+      "reconciliation": []
+    },
+    {
+      "ticker": "ADI",
+      "company": "Analog Devices",
+      "period": "FY2026Q3",
+      "file": "ADI-FY2026Q3.xlsx",
+      "wired": true,
+      "written": "D:\\OneDrive\\数桥咨询\\DB_models\\Openstocks\\agents-vs-wall-street-starter-main\\submission\\ADI-FY2026Q3.xlsx",
+      "processed_at": "2026-08-16T17:58:42+01:00",
+      "metrics": [
+        {
+          "label": "Revenue",
+          "units": "USDm",
+          "point": 3652.9529881579506,
+          "kind": "money",
+          "band": [
+            3287.8415525035784,
+            3716.530077631232
+          ],
+          "basis": "nested causal ensemble (responsive config); outer skill 62.1% across 8 unseen origins; direct cross-check 3900.0",
+          "sources": [
+            "2026-05-20__adi-us-20260520-q2-8k-2__1040614.md: revenue of $3.9 billion",
+            "Nested causal prequential evaluation; paired seasonal-naive baseline"
+          ],
+          "selection": {
+            "source": "nested",
+            "use_nested": true,
+            "reasons": [],
+            "outer_origins": 8,
+            "outer_mae": 214.93409807260463,
+            "baseline_mae": 567.125,
+            "relative_mae": 0.3789889320213438,
+            "outer_skill": 0.6210110679786562,
+            "config_id": "responsive"
+          },
+          "direct_point": 3900.0,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 3634.3255525506097,
+            "m2_skill": 0.5458678547532312,
+            "m1_skill": 0.6210110679786562,
+            "m2_origins": 24,
+            "reason": "M2 skill +0.55 does not beat guarded-nested M1 +0.62 by ≥5%"
+          }
+        },
+        {
+          "label": "Adjusted diluted EPS",
+          "units": "USD / share",
+          "point": 3.0595219927550454,
+          "kind": "eps",
+          "band": [
+            2.6109685250814945,
+            3.1235749091038976
+          ],
+          "basis": "nested causal ensemble (responsive config); outer skill 55.6% across 8 unseen origins; direct cross-check 3.3",
+          "sources": [
+            "2026-05-20__adi-us-20260520-q2-8k-2__1040614.md: adjusted EPS to be $3.30",
+            "Nested causal prequential evaluation; paired seasonal-naive baseline"
+          ],
+          "selection": {
+            "source": "nested",
+            "use_nested": true,
+            "reasons": [],
+            "outer_origins": 8,
+            "outer_mae": 0.2737843516512226,
+            "baseline_mae": 0.61625,
+            "relative_mae": 0.4442748099817,
+            "outer_skill": 0.5557251900183,
+            "config_id": "responsive"
+          },
+          "direct_point": 3.3,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 3.1190148251303116,
+            "m2_skill": 0.40805988892042544,
+            "m1_skill": 0.5557251900183,
+            "m2_origins": 24,
+            "reason": "M2 skill +0.41 does not beat guarded-nested M1 +0.56 by ≥5%"
+          }
+        },
+        {
+          "label": "Adjusted gross margin",
+          "units": "%",
+          "point": 71.56080490722753,
+          "kind": "pct",
+          "band": [
+            70.50886365668644,
+            72.61274615776863
+          ],
+          "basis": "nested causal ensemble (responsive config); outer skill 53.9% across 8 unseen origins; direct cross-check 74.0",
+          "sources": [
+            "ADI Q2 8-K adjusted gross margin table",
+            "Nested causal prequential evaluation; paired seasonal-naive baseline"
+          ],
+          "selection": {
+            "source": "nested",
+            "use_nested": true,
+            "reasons": [],
+            "outer_origins": 8,
+            "outer_mae": 1.0770568750578882,
+            "baseline_mae": 2.3374999999999986,
+            "relative_mae": 0.4607729946771717,
+            "outer_skill": 0.5392270053228283,
+            "config_id": "responsive"
+          },
+          "direct_point": 74.0,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 72.70934465053877,
+            "m2_skill": 0.38746530032915105,
+            "m1_skill": 0.5392270053228283,
+            "m2_origins": 24,
+            "reason": "M2 skill +0.39 does not beat guarded-nested M1 +0.54 by ≥5%"
+          }
+        }
+      ],
+      "reconciliation": [
+        {
+          "label": "Revenue",
+          "action": "guidance-guard",
+          "before": 3502.185815067405,
+          "after": 3652.9529881579506,
+          "guidance": 3900.0,
+          "deviation": 0.1020036371622038,
+          "model_weight": 0.6210110679786562,
+          "note": "blended toward issued guidance (model weight 0.62 = bounded outer skill)"
+        },
+        {
+          "label": "Adjusted diluted EPS",
+          "action": "guidance-guard",
+          "before": 2.867271717092696,
+          "after": 3.0595219927550454,
+          "guidance": 3.3,
+          "deviation": 0.131129782699183,
+          "model_weight": 0.5557251900183,
+          "note": "blended toward issued guidance (model weight 0.56 = bounded outer skill)"
+        }
+      ]
+    },
+    {
+      "ticker": "HAS",
+      "company": "Hays plc",
+      "period": "FY2026",
+      "file": "HAS-FY2026.xlsx",
+      "wired": true,
+      "written": "D:\\OneDrive\\数桥咨询\\DB_models\\Openstocks\\agents-vs-wall-street-starter-main\\submission\\HAS-FY2026.xlsx",
+      "processed_at": "2026-08-16T17:58:45+01:00",
+      "metrics": [
+        {
+          "label": "Net fees",
+          "units": "GBPm",
+          "point": 924.0,
+          "kind": "money",
+          "band": [
+            896,
+            951
+          ],
+          "basis": "FY2025 net fees £972m × (1+-5% reported YoY)",
+          "sources": [
+            "Hays FY2025 net fees",
+            "2026-07-10__has-ln-20260710-q4-8k__1572805.md: net fees YoY"
+          ],
+          "selection": {
+            "source": "direct",
+            "use_nested": false,
+            "reasons": [
+              "outer skill is not positive",
+              "deployment forecast fell back to seasonal naive"
+            ],
+            "outer_origins": 4,
+            "outer_mae": 113.04999999999997,
+            "baseline_mae": 113.04999999999997,
+            "relative_mae": 1.0,
+            "outer_skill": 0.0,
+            "config_id": "current"
+          },
+          "direct_point": 924.0,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 926.3047730336954,
+            "m2_skill": -0.19181514273626288,
+            "m1_skill": 0.0,
+            "m2_origins": 12,
+            "reason": "M2 skill -0.19 below the 0.15 meaningful-skill bar"
+          }
+        },
+        {
+          "label": "Pre-exceptional basic EPS",
+          "units": "GBp",
+          "point": 2.05,
+          "kind": "eps",
+          "band": [
+            1.59,
+            2.5
+          ],
+          "basis": "bridge: operating profit × approx after-tax/share ratio (pence) — coarse, refine with shares/tax",
+          "sources": [
+            "Hays operating profit → EPS bridge (approx)"
+          ],
+          "selection": {
+            "source": "direct",
+            "use_nested": false,
+            "reasons": [
+              "outer skill is not positive",
+              "deployment forecast fell back to seasonal naive"
+            ],
+            "outer_origins": 4,
+            "outer_mae": 2.322225690353287,
+            "baseline_mae": 2.2975,
+            "relative_mae": 1.0107619979774916,
+            "outer_skill": -0.010761997977491555,
+            "config_id": "current"
+          },
+          "direct_point": 2.05,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 0.787901001189622,
+            "m2_skill": 0.07310220618959296,
+            "m1_skill": -0.010761997977491555,
+            "m2_origins": 12,
+            "reason": "M2 skill +0.07 below the 0.15 meaningful-skill bar"
+          }
+        },
+        {
+          "label": "Pre-exceptional operating profit",
+          "units": "GBPm",
+          "point": 45.5,
+          "kind": "money",
+          "band": [
+            37.0,
+            46.0
+          ],
+          "basis": "stated top of £37–46m; consensus £Nonem → ~£45.5m",
+          "sources": [
+            "2026-07-10__has-ln-20260710-q4-8k__1572805.md: OP range + consensus"
+          ],
+          "selection": {
+            "source": "direct",
+            "use_nested": false,
+            "reasons": [
+              "outer skill is not positive",
+              "deployment forecast fell back to seasonal naive"
+            ],
+            "outer_origins": 4,
+            "outer_mae": 48.288753735979256,
+            "baseline_mae": 48.0,
+            "relative_mae": 1.006015702832901,
+            "outer_skill": -0.006015702832901093,
+            "config_id": "current"
+          },
+          "direct_point": 45.5,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 43.54053761735041,
+            "m2_skill": -0.021124375702697762,
+            "m1_skill": -0.006015702832901093,
+            "m2_origins": 12,
+            "reason": "M2 skill -0.02 below the 0.15 meaningful-skill bar"
+          }
+        }
+      ],
+      "reconciliation": []
+    },
+    {
+      "ticker": "DE",
+      "company": "Deere & Company",
+      "period": "FY2026Q3",
+      "file": "DE-FY2026Q3.xlsx",
+      "wired": true,
+      "written": "D:\\OneDrive\\数桥咨询\\DB_models\\Openstocks\\agents-vs-wall-street-starter-main\\submission\\DE-FY2026Q3.xlsx",
+      "processed_at": "2026-08-16T17:58:46+01:00",
+      "metrics": [
+        {
+          "label": "Worldwide net sales and revenues",
+          "units": "USDm",
+          "point": 12380.328275539034,
+          "kind": "money",
+          "band": [
+            10701.641216963815,
+            14059.015334114252
+          ],
+          "basis": "nested causal ensemble (strict config); outer skill 27.3% across 8 unseen origins; direct cross-check 11657.0",
+          "sources": [
+            "DE FY2025 Q3 net sales & revenues",
+            "DE Q2 8-K segment outlook",
+            "Nested causal prequential evaluation; paired seasonal-naive baseline"
+          ],
+          "selection": {
+            "source": "nested",
+            "use_nested": true,
+            "reasons": [],
+            "outer_origins": 8,
+            "outer_mae": 1560.1474184513727,
+            "baseline_mae": 2145.125,
+            "relative_mae": 0.7272990704277712,
+            "outer_skill": 0.2727009295722288,
+            "config_id": "strict"
+          },
+          "direct_point": 11657.0,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 13544.650656203588,
+            "m2_skill": 0.25418552447812903,
+            "m1_skill": 0.2727009295722288,
+            "m2_origins": 24,
+            "reason": "M2 skill +0.25 does not beat guarded-nested M1 +0.27 by ≥5%"
+          }
+        },
+        {
+          "label": "Diluted EPS (GAAP)",
+          "units": "USD / share",
+          "point": 5.202582290776288,
+          "kind": "eps",
+          "band": [
+            3.5075503169078033,
+            6.897614264644773
+          ],
+          "basis": "nested causal ensemble (strict config); outer skill 5.8% across 8 unseen origins; direct cross-check 4.88",
+          "sources": [
+            "DE Q2 8-K FY net income guidance",
+            "DE Q2 8-K six-month net income",
+            "Nested causal prequential evaluation; paired seasonal-naive baseline"
+          ],
+          "selection": {
+            "source": "nested",
+            "use_nested": true,
+            "reasons": [],
+            "outer_origins": 8,
+            "outer_mae": 1.8342682685127987,
+            "baseline_mae": 1.9462499999999998,
+            "relative_mae": 0.9424628226141548,
+            "outer_skill": 0.057537177385845184,
+            "config_id": "strict"
+          },
+          "direct_point": 4.88,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 4.290437331022165,
+            "m2_skill": 0.11158244731277878,
+            "m1_skill": 0.057537177385845184,
+            "m2_origins": 24,
+            "reason": "M2 skill +0.11 below the 0.15 meaningful-skill bar"
+          }
+        },
+        {
+          "label": "Production & Precision Ag operating profit",
+          "units": "USDm",
+          "point": 569.8160153471513,
+          "kind": "money",
+          "band": [
+            385.5366366065848,
+            754.0953940877178
+          ],
+          "basis": "nested causal ensemble (strict config); outer skill 6.9% across 8 unseen origins; direct cross-check 1154.0",
+          "sources": [
+            "DE Q2 8-K segment outlook (Production & Precision Ag)",
+            "Nested causal prequential evaluation; paired seasonal-naive baseline"
+          ],
+          "selection": {
+            "source": "nested",
+            "use_nested": true,
+            "reasons": [],
+            "outer_origins": 8,
+            "outer_mae": 498.3933744664599,
+            "baseline_mae": 535.5,
+            "relative_mae": 0.9307065816367132,
+            "outer_skill": 0.06929341836328684,
+            "config_id": "strict"
+          },
+          "direct_point": 1154.0,
+          "m2_decision": {
+            "use_m2": false,
+            "m2_point": 335.5770756891578,
+            "m2_skill": -0.35581452899033494,
+            "m1_skill": 0.06929341836328684,
+            "m2_origins": 12,
+            "reason": "M2 skill -0.36 below the 0.15 meaningful-skill bar"
+          }
+        }
+      ],
+      "reconciliation": [
+        {
+          "label": "Production & Precision Ag operating profit",
+          "action": "flag",
+          "before": 569.8160153471513,
+          "after": 569.8160153471513,
+          "direct": 1154.0,
+          "deviation": 0.506225289993803,
+          "note": "large disagreement with the sourced direct forecast and no reliable guidance anchor — kept the measured-skill value for review"
+        }
+      ]
+    }
+  ],
+  "stages": [
+    [
+      "2026-08-16T17:58:33+01:00",
+      "loaded manifest — 4 companies, 12 target numbers"
+    ],
+    [
+      "2026-08-16T17:58:41+01:00",
+      "HD: 3/3 numbers (2 nested, 1 direct) → wrote HD-FY2026Q2.xlsx"
+    ],
+    [
+      "2026-08-16T17:58:42+01:00",
+      "ADI: 3/3 numbers (3 nested, 0 direct, 2 guidance-guarded) → wrote ADI-FY2026Q3.xlsx"
+    ],
+    [
+      "2026-08-16T17:58:45+01:00",
+      "HAS: 3/3 numbers (0 nested, 3 direct) → wrote HAS-FY2026.xlsx"
+    ],
+    [
+      "2026-08-16T17:58:46+01:00",
+      "DE: 3/3 numbers (3 nested, 0 direct) → wrote DE-FY2026Q3.xlsx"
+    ],
+    [
+      "2026-08-16T17:58:46+01:00",
+      "wrote nested-parameter-evaluation report"
+    ]
+  ]
+}
