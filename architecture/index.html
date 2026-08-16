@@ -439,11 +439,10 @@ npm run check:forecasts</code></pre>
           <thead><tr><th>Route</th><th>What it shows</th></tr></thead>
           <tbody>
             <tr><td><code>/</code> → <code>/graph</code></td><td>The front door redirects straight to the pipeline graph</td></tr>
-            <tr><td><code>/graph</code></td><td>The whole pipeline as a node graph — ingestion, the autonomous provisioning layer, Methodology 1 ∥ Methodology 2, the guarded-nested selection, validation and output. Click a node to read its spec; press ▶ Run and the nodes light up over a server-sent event stream as the agent executes them, with a live log, then a one-click download of the outputs</td></tr>
+            <tr><td><code>/graph</code></td><td>The whole pipeline as a node graph — ingestion, the autonomous provisioning layer, the single Methodology 1, the guarded-nested selection, validation and output. Click a node to read its spec; press ▶ Run and the nodes light up over a server-sent event stream as the agent executes them, with a live log, then a one-click download of the outputs</td></tr>
             <tr><td><code>/graph?t=…</code></td><td>The governed graph for one company and metric, with edge thickness set by the learned ensemble weight</td></tr>
             <tr><td><code>/output</code></td><td>Which of the twelve came from the nested ensemble and which fell back to direct, the template contract and checker status, the deliverables, and the embedded clear-run log</td></tr>
-            <tr><td><code>/report</code></td><td>Methodology 1 against Methodology 2 (historical analogue) side by side, per metric — the comparison layer</td></tr>
-            <tr><td><code>/trace</code></td><td>The full provenance chain for one number: raw source excerpt → extraction → methodologies → selection → evidence gate → final figure</td></tr>
+            <tr><td><code>/trace</code></td><td>The full provenance chain for one number: raw source excerpt → extraction → methodology → selection → evidence gate → final figure</td></tr>
             <tr><td><code>/runlog</code></td><td>The raw clear-run evidence log, also written to <code>logs/clear-run.md</code> on every run</td></tr>
             <tr><td><code>/c/&lt;ticker&gt;</code></td><td>Per-metric candidate leaderboard: backtest error, prediction, weight, origin count, eligibility, guidance anchor, actual-series sparkline, evidence trail</td></tr>
             <tr><td><code>/overview</code>, <code>/backtest</code></td><td>The twelve figures with their basis; and the prequential backtest results and analysis</td></tr>
@@ -483,17 +482,15 @@ npm run check:forecasts</code></pre>
         files and one timestamped record, which is exactly what a reviewer needs to check a run.
       </p>
 
-      <h3>Two layers we built for comparison, not for the number</h3>
+      <h3>The autonomous provisioning layer</h3>
       <p>
         Before selection the pipeline runs an <strong>autonomous provisioning</strong> step: for
-        each metric an agent reads a catalogue of what features actually exist and each
+        each metric an agent reads a catalogue of what features actually exist and the
         methodology's input requirements, and decides how to provision them — bounded by a
         deterministic feature-control (enough history, non-degenerate variance, coverage) that it
-        is not allowed to override. We also built a second, independent <strong>Methodology 2</strong>
-        — historical-analogue matching with evidence-weighted Bear/Base/Bull scenarios — and compare
-        it against Methodology 1 in <code>/report</code>. Both are inspection and comparison
-        surfaces: the submitted twelve numbers come from the guarded-nested Methodology 1 path
-        described above, and neither layer can move a figure past the evidence gate.
+        is not allowed to override. It is an inspection surface only: the submitted twelve numbers
+        come from the single guarded-nested Methodology 1 path described above, and nothing here
+        can move a figure past the evidence gate.
       </p>
     </section>
 
