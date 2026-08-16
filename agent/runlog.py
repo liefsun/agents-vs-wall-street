@@ -84,6 +84,33 @@ def _sel(m: dict):
     return src, s.get("outer_skill"), s.get("outer_origins"), (s.get("reasons") or [])
 
 
+def _provenance_lines(company: dict) -> list[str]:
+    """Per-metric extraction trace for one company (docs read / admitted / rejected,
+    series composition, agent-vs-parser disagreements, sample quotes). Deterministic
+    replay of the committed research cache; failure here never breaks the log."""
+    out: list[str] = ["", "**Extraction provenance** — research agent → point-in-time series (offline cache replay):"]
+    try:
+        from . import history as _hist
+        for m in company["metrics"]:
+            pv = _hist.provenance(company["ticker"], m["label"])
+            rej = ", ".join(f"{k} ×{v}" for k, v in pv["rejection_reasons"].items())
+            comp = (f"{pv['series_points']} PIT observations "
+                    f"({pv['from_research']} research-read, {pv['parser_filled']} parser-filled)")
+            head = (f"- **{m['label']}**: {pv['docs_read']} documents read · {pv['admitted']} admitted · "
+                    f"{pv['rejected']} rejected" + (f" ({rej})" if rej else "") + f" → {comp}")
+            out.append(head)
+            for d in pv["disagreements"]:
+                out.append(f"    - ⚑ agent overrode parser at {d['period']}: agent {_num(d['agent_value'])} "
+                           f"vs parser {_num(d['parser_value'])} (gap {d['relative_gap'] * 100:.0f}%) — "
+                           f"kept the quote-corroborated value")
+            for s in pv["samples"][:1]:
+                if s.get("quote"):
+                    out.append(f'    - e.g. {s["period"]} = {_num(s["value"])} — "{s["quote"]}" ({s["doc"]})')
+    except Exception as exc:  # provenance is evidence, never a hard dependency of the run
+        out.append(f"- (extraction provenance unavailable: {type(exc).__name__})")
+    return out
+
+
 def build_lines(manifest: dict) -> list[str]:
     """Human-readable, detailed, timestamped clear-run log built from the manifest."""
     commit, branch = _commit_and_branch()
@@ -150,9 +177,10 @@ def build_lines(manifest: dict) -> list[str]:
                 if reasons:
                     note += ": " + "; ".join(str(r) for r in reasons)
             elif src == "nested":
-                note = "nested ensemble promoted"
+                cfg = (m.get("selection") or {}).get("config_id")
+                note = "nested ensemble promoted" + (f" ({cfg} config)" if cfg else "")
                 if isinstance(skill, (int, float)):
-                    note += f" (outer skill {skill:+.2f}" + (f" on {origins} unseen origins)" if origins is not None else ")")
+                    note += f" — outer skill {skill:+.2f}" + (f" on {origins} unseen origins" if origins is not None else "")
             elif reasons:
                 note = "guarded fallback → direct: " + "; ".join(str(r) for r in reasons)
             else:
@@ -162,6 +190,10 @@ def build_lines(manifest: dict) -> list[str]:
             if basis:
                 row += f" Basis: {basis}"
             L.append(row)
+
+        # ── Extraction provenance — how each number's series was built (deterministic replay)
+        L += _provenance_lines(c)
+
         written = c.get("written")
         L.append(f"- → workbook written: `{os.path.relpath(written, ROOT)}`" if written
                  else "- → (dry run — workbook not written)")

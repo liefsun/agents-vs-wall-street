@@ -592,3 +592,39 @@ def series_for(ticker: str, label: str) -> HistoricalSeries | None:
 
     merged, _disagreements = cross_check(researched, parsed)
     return merged
+
+
+def provenance(ticker: str, label: str) -> dict:
+    """Deterministic extraction trace for one metric, for the clear-run evidence log.
+
+    Replays the committed research cache offline (no network): how many documents the
+    agent read, how many readings it admitted vs rejected (with reasons), how the shipped
+    point-in-time series is composed (research vs parser gap-fill), any agent-vs-parser
+    disagreements the agent won, and a couple of sample admitted quotes.
+    """
+    builder = _SERIES_BUILDERS.get((ticker, label))
+    parsed = builder() if builder else None
+    researched, attempts = researched_series_for(ticker, label)
+
+    admitted = [a for a in attempts if getattr(a, "admitted", False) and getattr(a, "value", None) is not None]
+    rejected = [a for a in attempts if not getattr(a, "admitted", False)]
+    reasons: dict[str, int] = {}
+    for a in rejected:
+        r = (getattr(a, "rejection", None) or "rejected")
+        r = r.split("—")[0].split(":")[0].strip()[:52]
+        reasons[r] = reasons.get(r, 0) + 1
+
+    disagreements = cross_check(researched, parsed)[1] if researched is not None else []
+    final = series_for(ticker, label)
+    n_final = len(final.observations) if final else 0
+    n_research = len(researched.observations) if researched else 0
+
+    samples = [{"period": a.doc_period or a.published_at, "value": a.value,
+                "doc": a.doc_name, "quote": re.sub(r"\s+", " ", (a.quote or "")).strip()[:130]}
+               for a in admitted[:2]]
+
+    return {"docs_read": len(attempts), "admitted": len(admitted), "rejected": len(rejected),
+            "rejection_reasons": reasons, "series_points": n_final,
+            "from_research": min(n_research, n_final), "parser_filled": max(0, n_final - n_research),
+            "disagreements": disagreements, "samples": samples,
+            "agent_available": researched is not None}
