@@ -65,6 +65,43 @@ at least three unseen outer origins, positive outer skill against seasonal naive
 a non-fallback deployment ensemble with positive skill. Metrics without enough history
 remain on the auditable direct forecast.
 
+Historical ingestion is point-in-time and frequency-aware: quarterly US series use
+season 4, while Hays H1/FY observations use a semiannual season 2. The frozen corpus
+currently supports honest prequential diagnostics for 10 of 12 target metrics.
+
+### Research agent (`agent/research.py`)
+
+The reading step is done by an LLM working to an analyst brief per metric, not by a
+hand-written regular expression. For each target metric the agent retrieves the candidate
+earnings releases, reads focused excerpts around the metric's own language, and returns
+the figure **that document reports for its own period**, together with the sentence it
+took it from.
+
+Nothing the agent says is trusted on its word. Every extraction must pass a validation
+gate before it can enter a series:
+
+| Check | Rejects |
+| --- | --- |
+| Verbatim quote | a supporting sentence that does not appear in the source document |
+| Plausible range | a value outside the metric's order-of-magnitude bounds |
+| Stated confidence | anything the agent itself marks `low` |
+| Declared basis | a GAAP figure where the target is adjusted, a segment where the target is group |
+| Cross-check | a period where the agent and the deterministic parser disagree by more than 2% |
+
+`tests/test_research.py` drives each rejection path with a stubbed driver, including a
+fabricated quote, so the gate is shown to reject before any pass is believed.
+
+The agent extracts **reported historical facts**, never a forecast — that boundary is what
+keeps the numbers auditable. Completions are temperature 0 and disk-cached under
+`agent/cache/research/`; once the cache is warm the final run makes no network calls, so
+the clear run is reproducible offline. With no OpenAI key configured the agent is simply
+unavailable and the deterministic parsers in `agent/history.py` take over, so the pipeline
+never silently loses a stage.
+
+```bash
+cp .env.example .env        # then set OPENAI_API_KEY (and optionally OPENAI_MODEL)
+```
+
 ```bash
 uv run --with-requirements agent/requirements.txt python -m agent.run
 npm run check:forecasts

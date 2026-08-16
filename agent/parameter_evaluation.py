@@ -33,6 +33,7 @@ class BacktestSeries:
     kind: str
     axis: tuple[int, ...]
     values: tuple[float | None, ...]
+    season: int = 4
     guidance_by_key: Mapping[int, float] = field(
         default_factory=dict,
         repr=False,
@@ -49,6 +50,8 @@ class BacktestSeries:
             raise ValueError("axis and values must have the same length")
         if tuple(sorted(set(axis))) != axis:
             raise ValueError("axis must be strictly increasing")
+        if self.season < 1:
+            raise ValueError("season must be at least 1")
         object.__setattr__(self, "axis", axis)
         object.__setattr__(self, "values", values)
         object.__setattr__(
@@ -114,6 +117,55 @@ DEFAULT_PARAMETER_CONFIGS = (
         min_improvement=0.10,
     ),
 )
+
+
+def parameter_configs_for_season(season: int) -> tuple[BacktestConfig, ...]:
+    """Pre-registered policy candidates scaled to the reporting frequency."""
+
+    if season == 4:
+        return DEFAULT_PARAMETER_CONFIGS
+    if season != 2:
+        raise ValueError(f"unsupported reporting season: {season}")
+    base = replace(
+        DEFAULT_BACKTEST_CONFIG,
+        season=2,
+        origin_window=8,
+        min_train=4,
+        min_origins=3,
+    )
+    return (
+        base,
+        replace(base, config_id="responsive", origin_window=4, min_origins=2),
+        replace(
+            base,
+            config_id="diversified",
+            origin_window=6,
+            weight_cap=0.50,
+            baseline_weight_floor=0.25,
+        ),
+        replace(
+            base,
+            config_id="strict",
+            min_train=6,
+            min_origins=4,
+            weight_cap=0.50,
+            min_improvement=0.10,
+        ),
+    )
+
+
+def nested_evaluation_for_season(season: int) -> NestedEvaluationConfig:
+    """Pre-registered nested windows measured in observations, not calendar quarters."""
+
+    if season == 4:
+        return DEFAULT_NESTED_EVALUATION_CONFIG
+    if season == 2:
+        return NestedEvaluationConfig(
+            inner_window=6,
+            min_inner_origins=3,
+            outer_window=4,
+        )
+    raise ValueError(f"unsupported reporting season: {season}")
 
 
 def _mae(errors: Sequence[float]) -> float | None:
@@ -203,6 +255,9 @@ def _validate_inputs(
     seasons = {item.season for item in configs}
     if len(baselines) != 1 or len(seasons) != 1:
         raise ValueError("nested candidates must share one baseline and season")
+    series_seasons = {item.season for item in series}
+    if series_seasons != seasons:
+        raise ValueError("series and nested candidates must share one season")
 
 
 def _precompute_records(series, configs) -> dict:
@@ -458,8 +513,8 @@ def evaluate_nested_parameters(
 
 def evaluate_nested_portfolio(
     series: Sequence[BacktestSeries],
-    configs: Sequence[BacktestConfig] = DEFAULT_PARAMETER_CONFIGS,
-    evaluation: NestedEvaluationConfig = DEFAULT_NESTED_EVALUATION_CONFIG,
+    configs: Sequence[BacktestConfig] | None = None,
+    evaluation: NestedEvaluationConfig | None = None,
 ) -> dict:
     """Evaluate each company timeline independently, then aggregate outer errors."""
 
@@ -469,10 +524,23 @@ def evaluate_nested_portfolio(
     if not grouped_series:
         raise ValueError("at least one series is required")
 
-    company_reports = {
-        ticker: evaluate_nested_parameters(items, configs, evaluation)
-        for ticker, items in sorted(grouped_series.items())
-    }
+    company_reports = {}
+    company_configs = {}
+    company_evaluations = {}
+    for ticker, items in sorted(grouped_series.items()):
+        seasons = {item.season for item in items}
+        if len(seasons) != 1:
+            raise ValueError("one company fiscal timeline must use one season")
+        season = seasons.pop()
+        active_configs = tuple(configs) if configs is not None else parameter_configs_for_season(season)
+        active_evaluation = evaluation or nested_evaluation_for_season(season)
+        company_reports[ticker] = evaluate_nested_parameters(
+            items,
+            active_configs,
+            active_evaluation,
+        )
+        company_configs[ticker] = [config.to_dict() for config in active_configs]
+        company_evaluations[ticker] = active_evaluation.to_dict()
     outer_rows = [
         row
         for report in company_reports.values()
@@ -504,8 +572,16 @@ def evaluate_nested_portfolio(
                 "sensitivity evidence only; historical coverage is not portfolio-wide"
             ),
         },
-        "evaluation_config": evaluation.to_dict(),
-        "candidate_configs": [config.to_dict() for config in configs],
+        "evaluation_config": (
+            evaluation.to_dict()
+            if evaluation is not None
+            else {"company_local": True, "by_company": company_evaluations}
+        ),
+        "candidate_configs": (
+            [config.to_dict() for config in configs]
+            if configs is not None
+            else {"company_local": True, "by_company": company_configs}
+        ),
         "company_reports": company_reports,
         "outer_summary": {
             "company_rounds": sum(rounds_per_company.values()),
@@ -528,7 +604,8 @@ def build_available_series() -> list[BacktestSeries]:
         spec = company_spec(ticker)
         for metric in spec["metrics"]:
             label = metric["label"]
-            axis, values = prequential.series_for(ticker, label)
+            historical = prequential.history_for(ticker, label)
+            axis, values = historical.axis_values() if historical else (None, None)
             if not axis:
                 continue
             mapped_kind = METRIC_MAP.get(ticker, {}).get(label, (None, None))[1]
@@ -544,8 +621,9 @@ def build_available_series() -> list[BacktestSeries]:
                     kind=kind,
                     axis=tuple(axis),
                     values=tuple(values),
+                    season=historical.season,
                     guidance_by_key=prequential.guidance_for(ticker, label),
-                    models=tuple(governance.active_models(kind)),
+                    models=tuple(governance.active_models(kind, season=historical.season)),
                 )
             )
     return output
@@ -554,12 +632,14 @@ def build_available_series() -> list[BacktestSeries]:
 def recommended_config(
     report: dict,
     ticker: str,
-    configs: Sequence[BacktestConfig] = DEFAULT_PARAMETER_CONFIGS,
+    configs: Sequence[BacktestConfig] | None = None,
+    season: int = 4,
 ) -> BacktestConfig | None:
     recommendation = report.get("deployment_recommendations", {}).get(ticker)
     if not recommendation:
         return None
-    by_id = {config.config_id: config for config in configs}
+    active_configs = tuple(configs) if configs is not None else parameter_configs_for_season(season)
+    by_id = {config.config_id: config for config in active_configs}
     return by_id.get(recommendation["config_id"])
 
 
@@ -568,7 +648,7 @@ def forecast_recommendations(report: dict, series: Sequence[BacktestSeries]) -> 
 
     recommendations = []
     for item in series:
-        config = recommended_config(report, item.ticker)
+        config = recommended_config(report, item.ticker, season=item.season)
         if config is None:
             continue
         result = forecast_metric(
@@ -610,6 +690,17 @@ def render_markdown_report(report: dict) -> str:
     scope = report["scope"]
     summary = report["outer_summary"]
     company_rounds = summary.get("company_rounds", summary.get("rounds", 0))
+    if evaluation.get("company_local"):
+        protocol_line = (
+            "- Protocol windows are company-local and frequency-aware; see the JSON "
+            "report for each company's fixed values."
+        )
+    else:
+        protocol_line = (
+            f"- Protocol: inner window {evaluation['inner_window']} "
+            f"(minimum {evaluation['min_inner_origins']}); "
+            f"outer window {evaluation['outer_window']}."
+        )
     lines = [
         "# Nested causal parameter evaluation",
         "",
@@ -624,11 +715,7 @@ def render_markdown_report(report: dict) -> str:
         "- Primary loss is MAE; cross-series aggregation is median relative MAE.",
         "- Deployment recommendation is excluded from outer performance.",
         "- Config selection is company-local; fiscal keys are never ordered across companies.",
-        (
-            f"- Protocol: inner window {evaluation['inner_window']} "
-            f"(minimum {evaluation['min_inner_origins']}); "
-            f"outer window {evaluation['outer_window']}."
-        ),
+        protocol_line,
         "",
         "## Nested outer evaluation",
         "",
@@ -670,19 +757,44 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--markdown", type=Path)
     parser.add_argument("--json", type=Path)
-    parser.add_argument("--inner-window", type=int, default=12)
-    parser.add_argument("--min-inner-origins", type=int, default=6)
-    parser.add_argument("--outer-window", type=int, default=8)
-    parser.add_argument("--min-series", type=int, default=1)
+    parser.add_argument("--inner-window", type=int)
+    parser.add_argument("--min-inner-origins", type=int)
+    parser.add_argument("--outer-window", type=int)
+    parser.add_argument("--min-series", type=int)
     args = parser.parse_args(argv)
 
     series = build_available_series()
-    evaluation = NestedEvaluationConfig(
-        inner_window=args.inner_window,
-        min_inner_origins=args.min_inner_origins,
-        outer_window=args.outer_window,
-        min_series=args.min_series,
+    evaluation_args = (
+        args.inner_window,
+        args.min_inner_origins,
+        args.outer_window,
+        args.min_series,
     )
+    evaluation = None
+    if any(value is not None for value in evaluation_args):
+        defaults = DEFAULT_NESTED_EVALUATION_CONFIG
+        evaluation = NestedEvaluationConfig(
+            inner_window=(
+                args.inner_window
+                if args.inner_window is not None
+                else defaults.inner_window
+            ),
+            min_inner_origins=(
+                args.min_inner_origins
+                if args.min_inner_origins is not None
+                else defaults.min_inner_origins
+            ),
+            outer_window=(
+                args.outer_window
+                if args.outer_window is not None
+                else defaults.outer_window
+            ),
+            min_series=(
+                args.min_series
+                if args.min_series is not None
+                else defaults.min_series
+            ),
+        )
     report = evaluate_nested_portfolio(series, evaluation=evaluation)
     markdown = render_markdown_report(report)
 

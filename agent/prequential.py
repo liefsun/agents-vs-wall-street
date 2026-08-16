@@ -19,7 +19,7 @@ import math
 
 import numpy as np
 
-from . import candidates, extract
+from . import candidates, extract, history
 from .backtest import _series
 
 # z for a symmetric central band (P(|Z|<z) = conf)
@@ -38,8 +38,13 @@ def _kupiec(n: int, n_breach: int, p0: float):
     return float(1 - math.erf(math.sqrt(max(lr, 0) / 2)))     # chi2.cdf(x,1) = erf(sqrt(x/2))
 
 
-def _drift_for(kind: str):
-    return candidates.drift_add if kind == "pct" else candidates.drift_mult
+def _drift_for(kind: str, season: int):
+    producer = candidates.drift_add if kind == "pct" else candidates.drift_mult
+
+    def predict(values):
+        return producer(values, season=season)
+
+    return predict, producer.__name__
 
 
 # adapter approach -> is it a guidance replay?
@@ -49,7 +54,7 @@ _GUIDANCE_APPROACHES = {"guidance", "guide_reversion", "stated"}
 def run(axis, values, kind: str, approach: str | None = None,
         guidance_by_key: dict | None = None, conf: float = 0.80,
         model_fn=None, model_name: str | None = None,
-        origin_window: int = ORIGIN_WINDOW) -> dict:
+        origin_window: int = ORIGIN_WINDOW, season: int = candidates.SEASON) -> dict:
     """Walk-forward prequential backtest that REPLAYS THE ACTUAL APPROACH.
 
     - guidance approaches: at each origin predict with the guidance issued for that
@@ -59,11 +64,11 @@ def run(axis, values, kind: str, approach: str | None = None,
     Trailing ORIGIN_WINDOW avoids old-regime (mega-acquisition) contamination.
     """
     guidance_by_key = guidance_by_key or {}
-    axis2, y, filled = _series(axis, values)
-    if len(y) < MIN_TRAIN + 4:
+    axis2, y, filled = _series(axis, values, season=season)
+    if len(y) < MIN_TRAIN + season:
         return {"insufficient": True, "n": len(y),
-                "reason": f"series too short ({len(y)} periods) — need ≥{MIN_TRAIN + 4}"}
-    drift = _drift_for(kind)
+                "reason": f"series too short ({len(y)} periods) — need ≥{MIN_TRAIN + season}"}
+    drift, drift_name = _drift_for(kind, season)
     z = _Z.get(conf, 1.2816)
     use_guidance = (model_fn is None) and approach in _GUIDANCE_APPROACHES and bool(guidance_by_key)
 
@@ -98,7 +103,7 @@ def run(axis, values, kind: str, approach: str | None = None,
     nb, N = int(sum(breaches)), len(breaches)
     expected = 1 - conf
     return {"insufficient": False, "n_origins": len(pairs), "kind": kind,
-            "model": (model_name or ("guidance (issued t-1)" if use_guidance else drift.__name__)),
+            "model": (model_name or ("guidance (issued t-1)" if use_guidance else drift_name)),
             "mae": float(np.mean(np.abs(err))), "rmse": float(np.sqrt(np.mean(err ** 2))),
             "wape": float(np.sum(np.abs(err)) / (np.sum(np.abs(a)) or 1.0)),
             "conf": conf, "coverage_n": N, "n_breach": nb,
@@ -106,52 +111,29 @@ def run(axis, values, kind: str, approach: str | None = None,
             "kupiec_pvalue": (_kupiec(N, nb, expected) if N else None)}
 
 
-# ── which metrics have a usable historical series (ADI full panel + HD releases) ──
+# ── target histories ─────────────────────────────────────────────────────────────
 _ADI_MAP = {"Revenue": "revenue", "Adjusted gross margin": "adj_gross_margin",
             "Adjusted diluted EPS": "adj_eps"}
-_HD_MAP = {"Net sales": "net_sales", "Comparable sales, total company": "comp",
-           "Adjusted diluted EPS": "adj_eps"}
-_DE_MAP = {"Worldwide net sales and revenues": "net_sales_rev", "Diluted EPS (GAAP)": "eps_gaap"}
 
 # specific reasons where a clean history doesn't exist (honest, per Methodology 1 §13)
 _NO_SERIES_REASON = {
-    ("HD", "Adjusted diluted EPS"): "HD reports adjusted EPS only since ~2024 (≈8 quarters) — too few for walk-forward",
-    ("HD", "Comparable sales, total company"): "comparable-sales history too sparse in parseable form",
-    ("DE", "Production & Precision Ag operating profit"): "segment operating profit lives in segment tables — not extracted yet",
-    ("HAS", "Net fees"): "Hays reports annually/interim (mixed frequency) — quarterly series not built",
-    ("HAS", "Pre-exceptional operating profit"): "Hays annual/interim — series not built",
-    ("HAS", "Pre-exceptional basic EPS"): "Hays annual/interim — series not built",
+    ("HD", "Adjusted diluted EPS"): (
+        "only seven exact adjusted-EPS observations exist in the frozen corpus; "
+        "GAAP EPS is not substituted"
+    ),
 }
-
-
-def _series_from_periods(period_val: dict):
-    kv = sorted((extract.period_key(k), v) for k, v in period_val.items()
-                if extract.period_key(k) is not None and v is not None)
-    if len(kv) < 4:
-        return None, None
-    lo, hi = kv[0][0], kv[-1][0]
-    d = dict(kv)
-    axis = list(range(lo, hi + 1))
-    return axis, [d.get(k) for k in axis]
 
 
 def series_for(ticker: str, label: str):
     """(axis, values) for a metric where we have a series, else (None, None)."""
-    if ticker == "ADI" and label in _ADI_MAP:
-        panel = extract.build_panel("ADI")
-        return extract.metric_series(panel, _ADI_MAP[label])
-    if ticker == "HD" and label in _HD_MAP:
-        from .direct import _hd_series
-        S = _hd_series()
-        key = _HD_MAP[label]
-        pv = {per: info["row"].get(key) for per, info in S.items()}
-        return _series_from_periods(pv)
-    if ticker == "DE" and label in _DE_MAP:
-        from .direct import _de_series
-        S = _de_series()
-        key = _DE_MAP[label]
-        return _series_from_periods({per: r.get(key) for per, r in S.items()})
-    return None, None
+    historical = history.series_for(ticker, label)
+    return historical.axis_values() if historical else (None, None)
+
+
+def history_for(ticker: str, label: str) -> history.HistoricalSeries | None:
+    """Return the provenance-bearing history used by the backtest."""
+
+    return history.series_for(ticker, label)
 
 
 def guidance_for(ticker: str, label: str) -> dict:
@@ -169,13 +151,21 @@ def guidance_for(ticker: str, label: str) -> dict:
 
 
 def backtest_metric(ticker: str, label: str, kind: str) -> dict:
-    axis, values = series_for(ticker, label)
+    historical = history_for(ticker, label)
+    axis, values = historical.axis_values() if historical else (None, None)
     if not axis:
         return {"insufficient": True,
                 "reason": _NO_SERIES_REASON.get((ticker, label), "no historical series for this metric yet")}
     from . import methodology
     approach = methodology.metric_plan(ticker, label).get("approach")
-    return run(axis, values, kind, approach=approach, guidance_by_key=guidance_for(ticker, label))
+    return run(
+        axis,
+        values,
+        kind,
+        approach=approach,
+        guidance_by_key=guidance_for(ticker, label),
+        season=historical.season,
+    )
 
 
 def _kind_from_units(units: str) -> str:

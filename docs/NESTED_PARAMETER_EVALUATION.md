@@ -1,6 +1,6 @@
 # Nested causal parameter evaluation
 
-> Snapshot: 2026-08-16. This is sensitivity evidence across 6 of 12 target metrics;
+> Snapshot: 2026-08-16. This is sensitivity evidence across 10 of 12 target metrics;
 > it does not claim portfolio-wide parameter optimality.
 
 ## Evaluation contract
@@ -16,29 +16,33 @@
 - The deployment recommendation uses completed history and is excluded from reported
   outer performance.
 
-Protocol: trailing 12 inner origins, at least 6 paired inner origins, and the last 8
-eligible outer rounds. Four pre-registered configurations are evaluated: `current`,
-`responsive`, `diversified`, and `strict`.
+Protocols are pre-registered by reporting frequency. Quarterly series use trailing 12
+inner origins, at least 6 paired inner origins, and 8 outer rounds. Hays H1/FY series
+use season 2 with 6 inner origins, at least 3 paired inner origins, and 4 outer rounds.
+Both evaluate `current`, `responsive`, `diversified`, and `strict`.
 
 ## Nested outer results
 
-The nested policy produced 46 genuinely unseen predictions over 24 company-local outer
-rounds (8 per company). Aggregate relative MAE was **0.515**, equivalent to **48.5% skill** versus the paired
-seasonal-naive baseline.
+The nested policy produced 66 genuinely unseen predictions over 28 company-local outer
+rounds. Aggregate relative MAE was **0.781**, equivalent to **21.9% skill** versus the
+paired seasonal-naive baseline.
 
 | Metric | Outer origins | Method MAE | Baseline MAE | Relative MAE | Skill |
 |---|---:|---:|---:|---:|---:|
 | ADI Adjusted diluted EPS | 8 | 0.262 | 0.616 | 0.425 | 57.5% |
 | ADI Adjusted gross margin | 8 | 1.152 | 2.337 | 0.493 | 50.7% |
 | ADI Revenue | 8 | 291.339 | 580.000 | 0.502 | 49.8% |
-| DE Diluted EPS (GAAP) | 8 | 1.487 | 2.034 | 0.731 | 26.9% |
-| DE Worldwide net sales and revenues | 6 | 1,827.657 | 3,469.167 | 0.527 | 47.3% |
-| HD Net sales | 8 | 1,310.052 | 1,625.000 | 0.806 | 19.4% |
+| DE Diluted EPS (GAAP) | 8 | 1.789 | 1.946 | 0.919 | 8.1% |
+| DE Production & Precision Ag operating profit | 8 | 394.959 | 535.500 | 0.738 | 26.2% |
+| DE Worldwide net sales and revenues | 6 | 1,870.063 | 2,575.333 | 0.726 | 27.4% |
+| Hays Net fees | 4 | 113.050 | 113.050 | 1.000 | 0.0% |
+| Hays Pre-exceptional basic EPS | 4 | 2.322 | 2.297 | 1.011 | -1.1% |
+| Hays Pre-exceptional operating profit | 4 | 48.139 | 47.850 | 1.006 | -0.6% |
+| HD Net sales | 8 | 1,843.163 | 2,237.500 | 0.824 | 17.6% |
 
-The company-local outer loops selected `current` 8 times, `responsive` 14 times and
-`strict` 2 times. Using all completed history, deployment recommendations are
-**HD=`current`**, **ADI=`responsive`**, and **DE=`responsive`**. These choices are
-operational guidance, not part of the 48.5% outer performance estimate.
+Using all completed history, deployment recommendations are **HD=`strict`**,
+**ADI=`responsive`**, **DE=`current`**, and **HAS=`current`**. These choices are
+operational guidance, not part of the 21.9% outer performance estimate.
 
 ## Guarded forecast impact
 
@@ -47,16 +51,17 @@ no seasonal-naive fallback and positive deployment ensemble skill.
 
 | Metric | Direct point | Guarded final point | Decision |
 |---|---:|---:|---|
-| HD Net sales | 46,886.00 | 46,239.91 | nested |
+| HD Net sales | 46,886.00 | 45,885.91 | nested |
 | ADI Revenue | 3,900.00 | 3,514.10 | nested |
 | ADI Adjusted diluted EPS | 3.30 | 2.8621 | nested |
 | ADI Adjusted gross margin | 74.00 | 71.6259 | nested |
-| DE Worldwide net sales and revenues | 11,657.00 | 12,354.77 | nested |
-| DE Diluted EPS (GAAP) | 4.88 | 4.9169 | nested |
+| DE Worldwide net sales and revenues | 11,657.00 | 12,227.76 | nested |
+| DE Diluted EPS (GAAP) | 4.88 | 5.4055 | nested |
+| DE Production & Precision Ag operating profit | 1,154.00 | 592.88 | nested |
 
-HD adjusted EPS and comparable sales, all three Hays metrics, and DE Production &
-Precision Ag operating profit remain on sourced direct forecasts because their current
-histories do not satisfy the nested evidence gate.
+HD adjusted EPS and comparable sales remain direct because their exact histories are
+too short. All three Hays metrics now have semiannual nested evidence but remain direct
+because their outer skill is not positive and deployment falls back to seasonal naive.
 
 ## Reproduce
 
