@@ -18,7 +18,7 @@ from flask import Flask, Response, redirect
 import json as _json
 
 from .forecast import forecast_company, METRIC_MAP, company_spec
-from .corpus import FOLDER
+from .corpus import FOLDER, ROOT
 from . import workbook, governance, output, methodology, direct
 
 app = Flask(__name__)
@@ -117,7 +117,8 @@ def index():
             f"<div class=sub><b>{methodology.METHODOLOGY_1['name']}</b> · direct output "
             f"(backtesting deferred). {manifest['n_filled']}/{manifest['n_total']} numbers produced.</div>"
             f"<div class=card><a href='/graph'>▶ one pipeline · four companies · output layer (graph)</a>"
-            f" &nbsp;·&nbsp; <a href='/output'>output layer — what we emit</a>"
+            f" &nbsp;·&nbsp; <a href='/output'>output layer</a>"
+            f" &nbsp;·&nbsp; <a href='/backtest'>backtest results</a>"
             f" &nbsp;·&nbsp; <a href='/run'>write the 4 workbooks</a></div>"
             f"<h2>Four companies · twelve metrics</h2>{rows}")
     return Response(_page("Forecasting agent", body), mimetype="text/html")
@@ -210,6 +211,75 @@ def output_page():
             f"{spec['n_numbers']} numbers in {len(spec['files'])} workbooks.</div>"
             f"{hdr}{action}{files}<a href='/graph'>← pipeline graph</a> · <a href='/'>overview</a>")
     return Response(_page("Output", body), mimetype="text/html")
+
+
+@app.get("/backtest")
+def backtest_page():
+    from . import prequential as _pq
+    from . import param_eval as _pe
+    rows = _pq.run_all()
+    pe_map = {(x["ticker"], x["label"]): x for x in _pe.compare_all()}
+    # write outputs/backtest.json (Methodology 1 §11 auditability)
+    try:
+        outdir = os.path.join(ROOT, "outputs")
+        os.makedirs(outdir, exist_ok=True)
+        with open(os.path.join(outdir, "backtest.json"), "w", encoding="utf-8") as fh:
+            _json.dump(rows, fh, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        pass
+
+    def _pct(x):
+        return f"{x:.0%}" if x is not None else "—"
+
+    n_tested = sum(1 for r in rows if not r.get("insufficient"))
+    n_miscal = sum(1 for r in rows if not r.get("insufficient")
+                   and r.get("kupiec_pvalue") is not None and r["kupiec_pvalue"] < 0.05)
+    cards = ""
+    for t in ("HD", "ADI", "HAS", "DE"):
+        crows = [r for r in rows if r["ticker"] == t]
+        body = ""
+        for r in crows:
+            if r.get("insufficient"):
+                body += (f"<div style='padding:6px 0;border-bottom:1px solid #1e252f'>"
+                         f"<div style='display:flex;justify-content:space-between'>"
+                         f"<span>{html.escape(r['label'])} <span class=u>{html.escape(r['units'])}</span></span>"
+                         f"<span class=u>skipped</span></div>"
+                         f"<div class=ev>{html.escape(r.get('reason', 'no series'))}</div></div>")
+                continue
+            kp = r.get("kupiec_pvalue")
+            if kp is None:
+                badge = "<span class=badge>— </span>"
+            elif kp < 0.05:
+                badge = "<span class='badge lab'>miscalibrated</span>"
+            else:
+                badge = "<span class='badge guide'>calibrated</span>"
+            kps = f"{kp:.2f}" if kp is not None else "n/a"
+            body += (f"<div style='padding:7px 0;border-bottom:1px solid #1e252f'>"
+                     f"<div style='display:flex;justify-content:space-between'>"
+                     f"<span><b>{html.escape(r['label'])}</b> <span class=u>{html.escape(r['units'])}</span></span>"
+                     f"<span>{badge}</span></div>"
+                     f"<div class=u style='margin:3px 0'>n={r['n_origins']} · {_pq.headline_error(r)} · "
+                     f"RMSE {r['rmse']:.3g} · breach {_pct(r['breach_rate'])}/exp {_pct(r['expected_breach'])} · "
+                     f"Kupiec p={kps}</div>"
+                     f"<div class=ev>{html.escape(r['analysis'])}</div>")
+            pe = pe_map.get((r["ticker"], r["label"]))
+            if pe and not pe.get("insufficient"):
+                rank = " › ".join(x["model"] for x in pe["rows"][:4])
+                sens = pe.get("sensitivity") or {}
+                beats = "beats seasonal-naive ✓" if pe["beats_baseline"] else "≤ baseline"
+                robust = "robust across windows" if sens.get("robust") else "window-sensitive"
+                body += (f"<div class=ev style='color:#8fa8c8'>▸ param eval: best <b>{html.escape(pe['best'])}</b> "
+                         f"· {beats} · {robust} · ranking: {html.escape(rank)}</div>")
+            body += "</div>"
+        cards += (f"<div class=card><b>{html.escape(crows[0]['company'])}</b> "
+                  f"<span class=badge>{html.escape(crows[0]['period'])}</span>{body}</div>")
+    body = (f"<h1>Prequential backtest — results & analysis</h1>"
+            f"<div class=sub>Walk-forward one-step-ahead (pulled from quant-projects garch_var). "
+            f"Point error (WAPE/RMSE) + VaR-style band coverage + Kupiec POF test. "
+            f"<b>{n_tested}/12 metrics tested · {n_miscal} band(s) miscalibrated.</b> "
+            f"Written to <code>outputs/backtest.json</code>.</div>"
+            f"{cards}<a href='/graph'>← pipeline graph</a> · <a href='/'>overview</a>")
+    return Response(_page("Backtest", body), mimetype="text/html")
 
 
 @app.get("/run")
@@ -541,7 +611,7 @@ def _combined_svg(manifest, spec):
     band("P1 · DATA INGESTION", 122, "corpus → extract → panel", "#6aa0ff")
     band("P2 · METHODOLOGY 1", 258, "fixed — decides HOW and owns the model approaches", "#8b93a1")
     band("P3 · MODEL APPROACHES", 350, "owned by Methodology 1 (backtesting deferred)", "#f0b768")
-    band("P4 · STATS CONTROL", 458, "validate each number after the approaches", "#8b93a1")
+    band("P4 · CONTROL · BACKTEST · PARAM-EVAL", 458, "validate + walk-forward backtest + model grid — run alongside", "#8b93a1")
     band("P5 · OUTPUT LAYER", 530, "4 workbooks · 12 numbers", "#3fb950")
 
     # INPUT — four companies
@@ -581,6 +651,31 @@ def _combined_svg(manifest, spec):
                             "sub": "P2 · FIXED / constitutional — the agent reads this and obeys it",
                             "body": _methodology_html()}
 
+    # LLM driver (optional, OpenAI) — qualitative signals from calls/slides (§6)
+    from .llm import LLM
+    _llm = LLM()
+    ldc = "#6aa0ff" if _llm.available else "#5c6470"
+    parts.append(_rect(700, 190, 214, 42, "llm_driver",
+                       (ldc + "1e") if _llm.available else "#171c24", ldc,
+                       ["LLM driver · signals (§6)",
+                        ("OpenAI: " + _llm.model) if _llm.available else "set OPENAI_API_KEY in .env"],
+                       dash=not _llm.available))
+    parts.append('<path d="M810,160 C810,176 805,176 805,190" fill="none" stroke="#2b3745" stroke-width="0.8"/>')
+    parts.append('<path d="M700,222 C640,248 690,262 680,278" fill="none" stroke="#3a4658" '
+                 'stroke-width="0.8" stroke-dasharray="3 3"/>')
+    nodes["llm_driver"] = {
+        "t": "LLM driver — qualitative signals (§6)",
+        "plug": "code" if _llm.available else "no",
+        "sub": "OpenAI · reads calls/slides · never sets the numbers",
+        "body": (f"<b>OpenAI driver active</b> (model {_llm.model}, disk-cached). Reads the latest call/slides "
+                 "and codes demand / pricing / inventory / management-confidence / guidance-direction on a "
+                 "−2..+2 scale with reasons. Informational only — feeds the deferred regime/scenario layer; "
+                 "it never sets a forecast number (Methodology 1 §6)."
+                 if _llm.available else
+                 "<b>No OpenAI key.</b> Set <code>OPENAI_API_KEY</code> in the <code>.env</code> file to enable. "
+                 "The numeric pipeline runs fine without it — the LLM only reads / extracts / explains, it never "
+                 "sets the forecast numbers (Methodology 1).")}
+
     # P3 model approaches — OWNED by Methodology 1 (dashed container = belonging)
     parts.append('<rect x="150" y="356" width="760" height="88" rx="11" fill="#1d160c" '
                  'stroke="#7a5a1e" stroke-dasharray="5 4" opacity="0.85"/>')
@@ -595,10 +690,16 @@ def _combined_svg(manifest, spec):
         nodes[aid] = {"t": f"{t} — model approach", "plug": "hot",
                       "sub": "P3 · owned by Methodology 1 · formulas ↓", "body": _approach_html(aid)}
 
-    # P4 stats control — validate the produced numbers (backtesting deferred)
-    parts.append(f'<line x1="530" y1="444" x2="530" y2="470" stroke="#3a4658" stroke-width="1.4"/>')
-    parts.append(_rect(360, 470, 340, 38, "stats_control", "#1b222c", "#3a4658",
-                       ["Stats control · validate", "finite · range · sign · band — §11 checks"]))
+    # P4 · stats control + prequential backtest (run alongside the output)
+    parts.append('<line x1="530" y1="444" x2="530" y2="458" stroke="#3a4658" stroke-width="1.4"/>')
+    for cxn in (234, 530, 826):
+        parts.append(f'<path d="M530,458 C530,464 {cxn},462 {cxn},470" fill="none" stroke="#3a4658" stroke-width="1"/>')
+    parts.append(_rect(100, 470, 268, 38, "stats_control", "#1b222c", "#3a4658",
+                       ["Stats control · validate", "finite · range · sign · band"]))
+    parts.append(_rect(396, 470, 268, 38, "prequential", "#1b222c", "#3a4658",
+                       ["Prequential backtest", "walk-forward · coverage · Kupiec"]))
+    parts.append(_rect(692, 470, 268, 38, "param_eval", "#1b222c", "#3a4658",
+                       ["Parameter eval", "model grid · rank · robustness"]))
     from . import stats_control as _sc
     summ_sc = {"pass": 0, "warn": 0, "fail": 0, "n": 0}
     for c in cos:                                     # per company so duplicate labels (EPS) aren't merged
@@ -613,6 +714,31 @@ def _combined_svg(manifest, spec):
                                        f"<div class=kv><span>latest run</span><span>"
                                        f"{summ_sc['pass']} pass · {summ_sc['warn']} warn · {summ_sc['fail']} fail "
                                        f"/ {summ_sc['n']}</span></div><br><b class=u>Checks</b>{checkdoc}")}
+    nodes["prequential"] = {"t": "Prequential backtest", "plug": "no",
+                            "sub": "P4 · walk-forward, runs alongside the output",
+                            "body": ("Predictive-sequential backtest (pulled from quant-projects garch_var, "
+                                     "walk-forward VaR method). At each historical origin, fit on data-up-to-then, "
+                                     "forecast next, score the realized actual.<br><br>"
+                                     "<b class=u>Emits</b><div class=kv><span>point error</span>"
+                                     "<span class=u>prequential MAE / RMSE / WAPE</span></div>"
+                                     "<div class=kv><span>band coverage</span>"
+                                     "<span class=u>VaR-style breach rate vs expected</span></div>"
+                                     "<div class=kv><span>Kupiec POF</span>"
+                                     "<span class=u>LR test that breach rate is calibrated (χ²₁)</span></div><br>"
+                                     "<span class=u>Runs where a historical series exists (ADI full panel, HD releases).</span>"
+                                     "<br><br><a href='/backtest'>▸ open full backtest results &amp; analysis</a>")}
+    nodes["param_eval"] = {"t": "Parameter eval — model grid", "plug": "no",
+                           "sub": "P4 · pulled from quant-projects (compare_models + sensitivity)",
+                           "body": ("For each metric, evaluate a GRID of candidate models "
+                                    "(seasonal-naive · naive · drift · trend · AR · ETS · guidance) by prequential "
+                                    "out-of-sample error, rank them, pick the best and check it beats the "
+                                    "Seasonal-Naive baseline — the <b>compare_models</b> analog. Then a "
+                                    "<b>sensitivity</b> grid over the backtest window flags whether the winner is "
+                                    "robust or fragile.<br><br>"
+                                    "<span class=u>Findings drive model choice: e.g. ADI EPS → guidance wins "
+                                    "(validates the methodology); ADI gross margin → AR beats the drift the pipeline "
+                                    "currently uses.</span><br><br>"
+                                    "<a href='/backtest'>▸ see the per-metric model ranking</a>")}
 
     # P5 output — four workbooks + OUTPUT spec
     for c, x in zip(cos, xs):
@@ -689,7 +815,8 @@ def graph():
                 f"{run_card}"
                 f"{legend}<div class=card style='padding:10px'>{svg}</div>"
                 f"<div class=card><b>{manifest['n_filled']}/{manifest['n_total']} numbers produced</b> "
-                f"· {manifest['wired']}/4 companies wired · <a href='/output'>output detail →</a></div>"
+                f"· {manifest['wired']}/4 companies wired · <a href='/output'>output detail</a>"
+                f" · <a href='/backtest'>▸ prequential backtest results &amp; analysis</a></div>"
                 f"<div>Drill into learned weights: {focus}</div>"
                 f"<a href='/'>← overview</a>{_modal_js(nodes)}{run_js}")
         return Response(_page("Pipeline", body), mimetype="text/html")
@@ -776,6 +903,18 @@ def api_run():
             time.sleep(0.3)
             yield sse({"node": "u_extract", "log": f"   P1 · ingest → extract period panel  ({t})"})
             time.sleep(0.3)
+            # optional LLM driver — qualitative signals (reads calls/slides; never sets numbers)
+            from .llm import LLM as _LLM
+            _llm = _LLM()
+            if _llm.available:
+                from . import signals as _signals
+                s = _signals.qualitative_signals(t, _llm)
+                msg = s["summary"] if s else "(no signal)"
+                yield sse({"node": "llm_driver", "cls": "n", "log": f"   LLM driver · calls/slides → {msg}"})
+            else:
+                yield sse({"node": "llm_driver", "cls": "d",
+                           "log": "   LLM driver · no key (set OPENAI_API_KEY in .env) — numeric pipeline unaffected"})
+            time.sleep(0.25)
             d = direct.forecast(t)
             metrics = []
             for m in sp["metrics"]:
@@ -803,7 +942,39 @@ def api_run():
                 if r["verdict"] != "pass":
                     bad = ", ".join(c["name"] for c in r["checks"] if not c["ok"])
                     yield sse({"cls": "d", "log": f"        {'✗' if r['verdict']=='fail' else '⚠'} {lbl}: {r['verdict']} ({bad})"})
-            time.sleep(0.3)
+            time.sleep(0.25)
+            # P4 · prequential backtest (walk-forward, runs alongside the output)
+            from . import prequential as _pq
+            ran = 0
+            for mm in metrics:
+                r = _pq.backtest_metric(t, mm["label"], mm["kind"] or "money")
+                if r.get("insufficient"):
+                    continue
+                ran += 1
+                kp = f"{r['kupiec_pvalue']:.2f}" if r.get("kupiec_pvalue") is not None else "n/a"
+                br = r["breach_rate"] if r["breach_rate"] is not None else 0.0
+                flag = " ⚠miscalibrated" if (r.get("kupiec_pvalue") is not None and r["kupiec_pvalue"] < 0.05) else ""
+                yield sse({"node": "prequential", "cls": "d",
+                           "log": f"   P4 · backtest {mm['label']}: n={r['n_origins']} {_pq.headline_error(r)} "
+                                  f"breach={br:.0%}/exp{r['expected_breach']:.0%} Kupiec p={kp}{flag}"})
+                time.sleep(0.16)
+            if not ran:
+                yield sse({"node": "prequential", "cls": "d",
+                           "log": f"   P4 · backtest ({t}) skipped — no historical series yet"})
+            time.sleep(0.2)
+            # P4 · parameter eval (model grid: compare candidates, pick best, robustness)
+            from . import param_eval as _pe
+            for mm in metrics:
+                c = _pe.compare(t, mm["label"], mm["kind"] or "money")
+                if c.get("insufficient"):
+                    continue
+                sens = c.get("sensitivity") or {}
+                tag = ("beats baseline" if c["beats_baseline"] else "≤ baseline") + \
+                      (", robust" if sens.get("robust") else ", window-sensitive")
+                yield sse({"node": "param_eval", "cls": "d",
+                           "log": f"   P4 · param-eval {mm['label']}: best={c['best']} ({tag})"})
+                time.sleep(0.14)
+            time.sleep(0.15)
             path = workbook.write_direct(sp["outputFile"], sp["period"], metrics)
             yield sse({"node": f"out_{t}", "cls": "n", "log": f"   P5 · output → wrote {os.path.basename(path)}"})
             time.sleep(0.3)
