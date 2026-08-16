@@ -16,13 +16,14 @@ from __future__ import annotations
 import numpy as np
 
 from . import governance
+from .methodology import METHOD
 
-WEIGHT_CAP = 0.60
-MIN_TRAIN = 8          # a bit lower than the lab's 12: several metrics have ~20 clean quarters
-MIN_ORIGINS = 6
-ORIGIN_WINDOW = 16     # score only the most recent N origins — old history (mega-acquisition
-                       # step-changes: ADI/Linear'17, ADI/Maxim'21) is a different regime and
-                       # would otherwise dominate every model's error and wash out discrimination.
+# The BACKTESTING layer reads its parameters from the METHODOLOGY layer (the control
+# plane). Change the method there, not here. Aliased for readability below.
+WEIGHT_CAP = METHOD.weight_cap
+MIN_TRAIN = METHOD.min_train
+MIN_ORIGINS = METHOD.min_origins
+ORIGIN_WINDOW = METHOD.origin_window     # trailing window dodges regime/acquisition step-changes
 GUIDANCE_KEY = "guidance"
 GUIDANCE_LABEL = "Company guidance (issued t-1)"
 

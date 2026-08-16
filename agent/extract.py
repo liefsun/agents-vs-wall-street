@@ -188,7 +188,10 @@ class Row:
 
 def build_panel(ticker: str) -> list[Row]:
     """Assemble the period-indexed panel from all earnings releases (dedup by period,
-    keep the earliest published = first-reported / point-in-time)."""
+    keep the earliest published = first-reported / point-in-time). Companies without a
+    wired extractor return an empty panel (the pipeline then shows a pending structure)."""
+    if ticker not in EXTRACTORS:
+        return []
     act_fn, gd_fn = EXTRACTORS[ticker]
     by_key: dict[int, Row] = {}
     for d in corpus.earnings_releases(ticker):

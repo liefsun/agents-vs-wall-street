@@ -11,14 +11,15 @@ from __future__ import annotations
 
 import html
 import os
+import time
 
 from flask import Flask, Response, redirect
 
 import json as _json
 
-from .forecast import forecast_company, METRIC_MAP
+from .forecast import forecast_company, METRIC_MAP, company_spec
 from .corpus import FOLDER
-from . import workbook, governance
+from . import workbook, governance, output, methodology, direct
 
 app = Flask(__name__)
 TICKERS = ["HD", "ADI", "HAS", "DE"]
@@ -54,6 +55,13 @@ border-radius:3px;vertical-align:middle;margin:0 4px 0 12px}
 overflow:auto;font:12px ui-monospace,monospace;color:#c9d3df}
 .kv{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e252f;font-size:13px}
 .x{float:right;cursor:pointer;color:#8b93a1}
+.gnode.done rect{stroke:#2f6b43}
+.gnode.run rect{stroke:#3fb950 !important;stroke-width:2.6;filter:drop-shadow(0 0 6px #3fb95088)}
+#runlog{background:#0d1117;border:1px solid #263040;border-radius:8px;padding:10px;height:180px;
+overflow:auto;font:12px ui-monospace,monospace;color:#c9d3df;white-space:pre-wrap;margin-top:8px}
+#runlog .n{color:#6ee7a8} #runlog .d{color:#8b93a1}
+button{background:#1f6feb;color:#fff;border:0;border-radius:7px;padding:7px 14px;font:600 13px sans-serif;cursor:pointer}
+button:disabled{opacity:.5;cursor:default} button.g{background:#238636}
 """
 
 
@@ -89,40 +97,29 @@ def _page(title, body):
 
 @app.get("/")
 def index():
+    manifest = output.run_pipeline(write=False)
     rows = ""
-    for t in TICKERS:
-        mapped = t in METRIC_MAP
-        try:
-            fc = forecast_company(t) if mapped else None
-        except Exception as exc:
-            fc = None
-            mapped = False
-            note = f"<span class=u>error: {html.escape(str(exc))}</span>"
+    for c in manifest["companies"]:
         cells = ""
-        if fc:
-            for m in fc["metrics"]:
-                bd = m.band
-                band = f"{_fmt(bd[0], m.kind)}–{_fmt(bd[1], m.kind)}" if bd else ""
-                cells += (f"<div class=mrow><span>{html.escape(m.label)} "
-                          f"<span class=u>{html.escape(m.units)}</span></span>"
-                          f"<span><span class=pt>{_fmt(m.point, m.kind)}</span> "
-                          f"<span class=band>{band}</span></span></div>")
-            head = (f"<b>{html.escape(fc['company'])}</b> "
-                    f"<span class=badge>{html.escape(fc['period'])}</span> "
-                    f"<span class=u>· {fc['panel_rows']} periods</span>")
-        else:
-            head = f"<b>{t}</b> <span class=badge>extractor pending</span>"
-            cells = "<div class=u>corpus loads; ADI-shape extractor not yet wired for this company</div>"
+        for m in c["metrics"]:
+            bd = m["band"]
+            band = f"{_fmt(bd[0], m['kind'])}–{_fmt(bd[1], m['kind'])}" if bd else ""
+            val = _fmt(m["point"], m["kind"]) if m["point"] is not None else "—"
+            basis = f" <span class=u title=\"{html.escape(m.get('basis') or '')}\">ⓘ</span>" if m.get("basis") else ""
+            cells += (f"<div class=mrow><span>{html.escape(m['label'])} "
+                      f"<span class=u>{html.escape(m['units'])}</span></span>"
+                      f"<span><span class=pt>{val}</span> <span class=band>{band}</span>{basis}</span></div>")
+        head = (f"<b>{html.escape(c['company'])}</b> "
+                f"<span class=badge>{html.escape(c['period'])}</span>")
         rows += (f"<div class=card><div style='display:flex;justify-content:space-between'>"
-                 f"<div>{head}</div><a href='/c/{t}'>detail →</a></div>{cells}</div>")
-    phases = "".join(f"<span class=phase>{p}</span>" for p in
-                     ["1 · extract text→panel", "2 · candidate models", "3 · rolling-origin backtest",
-                      "4 · gate vs seasonal-naive", "5 · capped ensemble", "6 · fuse + band", "7 · write xlsx"])
+                 f"<div>{head}</div><a href='/graph?t={c['ticker']}'>graph →</a></div>{cells}</div>")
     body = (f"<h1>Agents vs Wall Street — forecasting agent</h1>"
-            f"<div class=sub>Same skeleton as the lab pipeline. Guidance competes as a "
-            f"backtestable candidate; the rolling-origin backtest decides its weight per metric.</div>"
-            f"<div>{phases}</div><h2>Four companies · twelve metrics</h2>{rows}"
-            f"<div class=card><a href='/run'>▶ write the 4 workbooks to submission/</a></div>")
+            f"<div class=sub><b>{methodology.METHODOLOGY_1['name']}</b> · direct output "
+            f"(backtesting deferred). {manifest['n_filled']}/{manifest['n_total']} numbers produced.</div>"
+            f"<div class=card><a href='/graph'>▶ one pipeline · four companies · output layer (graph)</a>"
+            f" &nbsp;·&nbsp; <a href='/output'>output layer — what we emit</a>"
+            f" &nbsp;·&nbsp; <a href='/run'>write the 4 workbooks</a></div>"
+            f"<h2>Four companies · twelve metrics</h2>{rows}")
     return Response(_page("Forecasting agent", body), mimetype="text/html")
 
 
@@ -176,29 +173,65 @@ def company(ticker):
     return Response(_page(fc["company"], body), mimetype="text/html")
 
 
+@app.get("/output")
+def output_page():
+    from flask import request
+    write = request.args.get("write") == "1"
+    spec = output.output_spec()
+    manifest = output.run_pipeline(write=write)
+    files = ""
+    for c in manifest["companies"]:
+        ready = c["wired"] and all(m["point"] is not None for m in c["metrics"])
+        rows = ""
+        for m in c["metrics"]:
+            val = _fmt(m["point"], m["kind"]) if m["point"] is not None else "—"
+            bd = m.get("band")
+            band = f" <span class=band>[{_fmt(bd[0], m['kind'])}–{_fmt(bd[1], m['kind'])}]</span>" if bd else ""
+            rows += (f"<div class=mrow><span>{html.escape(m['label'])} <span class=u>{html.escape(m['units'])}</span></span>"
+                     f"<span><span class=pt>{val}</span>{band}</span></div>")
+        status = ("<span class='badge guide'>ready</span>" if ready
+                  else "<span class=badge>pending</span>")
+        wrote = f"<span class=u>· wrote {os.path.basename(c['written'])}</span>" if c.get("written") else ""
+        files += (f"<div class=card><div style='display:flex;justify-content:space-between'>"
+                  f"<div><b>{html.escape(c['file'])}</b> <span class=u>{html.escape(c['company'])} · "
+                  f"{html.escape(c['period'])}</span> {status} {wrote}</div></div>{rows}</div>")
+    contract = "".join(f"<li>{html.escape(x)}</li>" for x in spec["contract"])
+    hdr = (f"<div class=card><b>Output layer — what the pipeline emits</b>"
+           f"<div class=mrow><span>deliverable</span><span>{html.escape(spec['deliverable'])}</span></div>"
+           f"<div class=mrow><span>numbers</span><span>{manifest['n_filled']}/{spec['n_numbers']} produced</span></div>"
+           f"<div class=mrow><span>final command</span><span class=u>python -m agent.run</span></div>"
+           f"<div class=mrow><span>checker</span><span class=u>{html.escape(spec['checker'])}</span></div>"
+           f"<div class=mrow><span>upload</span><span class=u>{html.escape(spec['upload'])}</span></div>"
+           f"<div style='margin-top:8px'><b class=u>Contract (Summary sheet)</b><ul class=u style='margin:6px 0'>{contract}</ul></div></div>")
+    action = (f"<div class=card><a href='/output?write=1'>▶ run pipeline for all four & write workbooks to submission/</a>"
+              + (f" <span class=u>· wrote {sum(1 for c in manifest['companies'] if c.get('written'))} files</span>" if write else "")
+              + "</div>")
+    body = (f"<h1>Output layer</h1><div class=sub>The four companies through one pipeline → "
+            f"{spec['n_numbers']} numbers in {len(spec['files'])} workbooks.</div>"
+            f"{hdr}{action}{files}<a href='/graph'>← pipeline graph</a> · <a href='/'>overview</a>")
+    return Response(_page("Output", body), mimetype="text/html")
+
+
 @app.get("/run")
 def run():
+    manifest = output.run_pipeline(write=True)
     lines = ""
-    for t in TICKERS:
-        if t not in METRIC_MAP:
-            lines += f"<div class=mrow><span>{t}</span><span class=u>skipped — extractor pending</span></div>"
+    for c in manifest["companies"]:
+        if not c["wired"]:
+            lines += f"<div class=mrow><span>{c['ticker']}</span><span class=u>skipped — extractor pending</span></div>"
             continue
-        try:
-            fc = forecast_company(t)
-            path = workbook.write_workbook(fc)
-            vals = ", ".join(f"{m.label}={_fmt(m.point, m.kind)}" for m in fc["metrics"] if m.point is not None)
-            lines += f"<div class=mrow><span>{os.path.basename(path)}</span><span class=u>{html.escape(vals)}</span></div>"
-        except Exception as exc:
-            lines += f"<div class=mrow><span>{t}</span><span class=u>error: {html.escape(str(exc))}</span></div>"
-    body = (f"<h1>Write workbooks</h1><div class=sub>submission/*.xlsx — validate with "
-            f"<code>npm run check:submission</code></div><div class=card>{lines}</div>"
-            f"<a href='/'>← overview</a>")
+        vals = ", ".join(f"{m['label']}={_fmt(m['point'], m['kind'])}"
+                         for m in c["metrics"] if m["point"] is not None)
+        lines += f"<div class=mrow><span>{os.path.basename(c['written'])}</span><span class=u>{html.escape(vals)}</span></div>"
+    body = (f"<h1>Write workbooks</h1><div class=sub>{manifest['n_filled']}/{manifest['n_total']} numbers · "
+            f"submission/*.xlsx — validate with <code>npm run check:submission</code></div>"
+            f"<div class=card>{lines}</div><a href='/output'>output detail →</a> · <a href='/'>overview</a>")
     return Response(_page("Run", body), mimetype="text/html")
 
 
 _PLUG_COLOR = {"hot": "#f0b768", "code": "#6aa0ff", "no": "#8b93a1"}
-_PHASE_Y = {"P1": (44, 112), "P2": (142, 210), "P3": (242, 362),
-            "P4": (398, 476), "P5": (516, 592)}
+_PHASE_Y = {"IN": (40, 92), "P1": (112, 232), "P2": (252, 312),
+            "P3": (332, 452), "P4": (472, 552), "P5": (572, 640)}
 
 
 def _rect(x, y, w, h, nid, fill, stroke, lines, dash=False, ring=None):
@@ -214,129 +247,454 @@ def _rect(x, y, w, h, nid, fill, stroke, lines, dash=False, ring=None):
     r = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="7" fill="{fill}" '
          f'stroke="{stroke}" stroke-width="1.4"{d}/>')
     rr = f'<rect x="{x-2}" y="{y-2}" width="{w+4}" height="{h+4}" rx="8" fill="none" stroke="{ring}" stroke-width="1.6"/>' if ring else ""
-    return f'<g class=gnode onclick="show(\'{nid}\')">{rr}{r}{txt}</g>'
+    return f'<g class=gnode id="n_{nid}" onclick="show(\'{nid}\')">{rr}{r}{txt}</g>'
+
+
+def _methodology_html():
+    """Full description of the active methodology (Methodology 1) for the node modal."""
+    M = methodology.METHODOLOGY_1
+
+    def ul(items):
+        return "<ul class=u style='margin:4px 0 8px;padding-left:18px'>" + "".join(
+            f"<li>{html.escape(str(x))}</li>" for x in items) + "</ul>"
+
+    h = (f"<div class=u style='margin:0 0 8px'>{html.escape(M['goal'])}</div>"
+         "<b class=u>Approach</b>" + ul(M["approach"]) +
+         "<b class=u>Core principles (the agent must obey)</b>" + ul(M["principles"]) +
+         "<b class=u>Flow</b><div class=u style='margin:4px 0 8px'>" +
+         " → ".join(html.escape(s) for s in M["flow"]) + "</div>" +
+         "<b class=u>Data priority</b>" + ul(M["data"]["priority"]) +
+         "<b class=u>Baseline — current form (backtesting deferred)</b>"
+         f"<div class=u style='margin:4px 0'>{html.escape(M['baseline']['formula'])}</div>"
+         f"<div class=u style='margin:0 0 8px'>allowed: {', '.join(M['baseline']['allowed'])}; "
+         f"forbidden: {html.escape(M['baseline']['forbidden'])}</div>"
+         "<b class=u>Per-company adapters (drive the models)</b>")
+    for t, a in M["adapters"].items():
+        h += f"<div class=kv><span><b>{t}</b> · {html.escape(a['name'])} · {a['period']}</span></div>"
+        for lbl, mp in a["metrics"].items():
+            h += (f"<div class=kv><span>{html.escape(lbl)}</span>"
+                  f"<span class=u>{mp['approach']} · {html.escape(mp['note'])}</span></div>")
+        h += f"<div class=u style='margin:2px 0 8px'>guidance: {html.escape(a['guidance'])}</div>"
+    h += ("<b class=u>Output rules</b>" + ul(M["output"]["rules"]) +
+          "<b class=u>Deferred (not in the current form)</b>"
+          f"<div class=u style='margin:4px 0'>{', '.join(M['deferred'])}</div>"
+          f"<div class=u style='margin:8px 0 0'><i>{html.escape(M['current_form'])}</i></div>")
+    return h
 
 
 def _graph_svg(fc, mf):
-    """Layered NN-style graph for one metric. Returns (svg, nodes_js)."""
-    W, H = 1060, 620
+    """Focus view for one metric, layered as the user's mental model:
+    Input(company, required output) -> Data ingestion -> Methodology -> Model
+    -> Backtesting -> Output. Returns (svg, nodes_js)."""
+    W, H = 1060, 664
     lb = {r["model"]: r for r in mf.result.get("leaderboard", [])} if mf and mf.point is not None else {}
     parts = [f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:1060px">']
     nodes = {}
 
-    # phase bands
-    for p in governance.PHASES:
-        y0, y1 = _PHASE_Y[p["id"]]
-        parts.append(f'<rect x="6" y="{y0-4}" width="{W-12}" height="{y1-y0+8}" rx="9" '
-                     f'fill="#12171e" stroke="#1c242e"/>')
-        plug = p["plug"]
-        col = _PLUG_COLOR[plug]
-        tag = {"hot": "HOT-SWAP", "code": "CODE", "no": "FIXED"}[plug]
-        parts.append(f'<text x="18" y="{y0+12}" fill="#6b7480" font="600 11px sans-serif" '
-                     f'style="font:600 11px sans-serif">{p["id"]} · {html.escape(p["title"])}</text>')
-        parts.append(f'<text x="18" y="{y0+27}" fill="{col}" style="font:10px sans-serif">{tag}</text>')
-
     def cx(x, w): return x + w / 2
 
-    # P1 sources
-    src = [("src_filings", "Filings"), ("src_transcripts", "Transcripts"), ("src_slides", "Slides")]
-    sx = [300, 520, 740]
-    p1c = []
-    for (nid, label), x in zip(src, sx):
-        parts.append(_rect(x, 60, 140, 34, nid, "#1a2531", "#33506e", [label]))
-        p1c.append((cx(x, 140), 94))
-        nodes[nid] = {"t": label, "plug": "code", "sub": "P1 · Ingest",
-                      "body": f"Frozen corpus document type. {fc['company']} has {fc['panel_rows']} extracted periods."}
-    # P2 extractor
-    ex_x, ex_w = 400, 240
-    parts.append(_rect(ex_x, 158, ex_w, 40, "extract", "#2a2312", "#7a5a1e",
-                       ["Extract → period panel", f"{fc['ticker']} · actuals + issued guidance"]))
-    exc = (cx(ex_x, ex_w), 198); ext = (cx(ex_x, ex_w), 158)
-    nodes["extract"] = {"t": "Extractor → period panel", "plug": "hot", "sub": "P2 · Extract (hot-swap)",
-                        "body": f"Text→panel for {fc['company']}. Per-metric prose+table regex, LLM fallback seam. "
-                                f"Panel: {fc['panel_rows']} periods."}
-    for c in p1c:
-        parts.append(f'<path d="M{c[0]},{c[1]} C{c[0]},130 {ext[0]},130 {ext[0]},{ext[1]}" fill="none" stroke="#2b3745" stroke-width="1"/>')
+    def band(y0, y1, ident, title, plug):
+        col = _PLUG_COLOR.get(plug, "#6b7480")
+        tag = {"hot": "HOT-SWAP", "code": "CODE", "no": "FIXED", "in": "GIVEN"}.get(plug, "")
+        parts.append(f'<rect x="6" y="{y0-4}" width="{W-12}" height="{y1-y0+8}" rx="9" fill="#12171e" stroke="#1c242e"/>')
+        parts.append(f'<text x="18" y="{y0+12}" fill="#6b7480" style="font:600 11px sans-serif">{ident} · {html.escape(title)}</text>')
+        parts.append(f'<text x="18" y="{y0+27}" fill="{col}" style="font:10px sans-serif">{tag}</text>')
 
-    # P3 candidate layer (+ guidance)
+    # INPUT
+    iy = _PHASE_Y["IN"]
+    band(iy[0], iy[1], "IN", "Input · (company code, required output)", "in")
+    metric_lab = mf.label if mf else ""
+    parts.append(_rect(380, 50, 300, 34, "input", "#101a26", "#3b5b7e",
+                       [f"{fc['ticker']} · {metric_lab}", f"required: {mf.units if mf else ''} · {fc['period']}"]))
+    nodes["input"] = {"t": "Input — what the pipeline is asked to do", "plug": "given",
+                      "sub": "company code + required output",
+                      "body": f"Forecast <b>{html.escape(metric_lab)}</b> for {fc['company']} ({fc['ticker']}), "
+                              f"reported in {mf.units if mf else ''} for {fc['period']}. "
+                              f"The required-output contract comes from companies.json."}
+    inb = (530, 84)
+
+    # bands P1..P5 (titles/plugs from governance.PHASES)
+    P = {p["id"]: p for p in governance.PHASES}
+    for pid in ("P1", "P2", "P3", "P4", "P5"):
+        y0, y1 = _PHASE_Y[pid]
+        band(y0, y1, pid, P[pid]["title"], P[pid]["plug"])
+
+    # P1 Data ingestion: sources -> extract
+    for (nid, label), x in zip([("src_filings", "Filings"), ("src_transcripts", "Transcripts"),
+                                ("src_slides", "Slides")], [300, 520, 740]):
+        parts.append(_rect(x, 122, 140, 28, nid, "#1a2531", "#33506e", [label]))
+        parts.append(f'<path d="M{x+70},150 C{x+70},168 520,168 520,182" fill="none" stroke="#2b3745" stroke-width="0.8"/>')
+        nodes[nid] = {"t": label, "plug": "code", "sub": "P1 · Data ingestion",
+                      "body": f"Frozen corpus document type. {fc['company']}: {fc['panel_rows']} extracted periods."}
+    parts.append(_rect(400, 182, 240, 40, "extract", "#2a2312", "#7a5a1e",
+                       ["Extract → period panel", f"{fc['ticker']} · actuals + issued guidance"]))
+    parts.append(f'<path d="M{inb[0]},{inb[1]} C{inb[0]},104 520,104 520,182" fill="none" stroke="#2b3745" stroke-width="1.2"/>')
+    nodes["extract"] = {"t": "Extractor → period panel", "plug": "hot", "sub": "P1 · Data ingestion (hot-swap)",
+                        "body": f"Text→panel for {fc['company']}: per-metric prose+table regex, LLM fallback seam. "
+                                f"Panel: {fc['panel_rows']} periods (actuals + issued guidance)."}
+
+    # P2 Methodology (control plane) — Methodology 1
+    parts.append(_rect(360, 262, 340, 40, "methodology", "#1a1f27", "#4a5568",
+                       ["Methodology 1 · click to read", "filing baseline + guidance — decides HOW"]))
+    parts.append(f'<line x1="520" y1="222" x2="530" y2="262" stroke="#3a4658" stroke-width="1.4"/>')
+    mthb = (530, 302)
+    nodes["methodology"] = {"t": methodology.METHODOLOGY_1["name"], "plug": "no",
+                            "sub": "P2 · FIXED / constitutional — the agent reads this and obeys it",
+                            "body": _methodology_html()}
+
+    # P3 Model (candidates)
     models = governance.active_models(mf.kind) if (mf and mf.kind) else governance.active_models("money")
     ids = [m.id for m in models] + ["guidance"]
     mnode = {m.id: m for m in models}
     n = len(ids)
-    gap, mw = 10, 0
-    mw = (W - 40 - (n - 1) * gap) / n
+    mw = (W - 40 - (n - 1) * 10) / n
     p3c = {}
     for i, mid in enumerate(ids):
-        x = 20 + i * (mw + gap)
+        x = 20 + i * (mw + 10)
         row = lb.get(mid, {})
-        plug = row.get("plug", "hot" if mid == "guidance" else mnode.get(mid).plug if mid in mnode else "code")
+        plug = row.get("plug", "hot" if mid == "guidance" else (mnode[mid].plug if mid in mnode else "code"))
         col = _PLUG_COLOR.get(plug, "#6aa0ff")
         elig = row.get("eligible")
         w = row.get("weight", 0.0)
-        lab = "guidance" if mid == "guidance" else mnode[mid].label if mid in mnode else mid
+        lab = "guidance" if mid == "guidance" else (mnode[mid].label if mid in mnode else mid)
         short = (lab[:16] + "…") if len(lab) > 17 else lab
-        ring = "#3fb950" if elig else None
-        fill = col + "22"
-        parts.append(_rect(x, 278, mw, 50, mid, fill, col, [short, f"w {w:.2f}"], ring=ring))
-        p3c[mid] = (cx(x, mw), 328, cx(x, mw), 278)
-        # edge extractor -> model
-        parts.append(f'<path d="M{exc[0]},{exc[1]} C{exc[0]},240 {p3c[mid][2]},240 {p3c[mid][2]},278" fill="none" stroke="#22303e" stroke-width="0.8"/>')
+        parts.append(_rect(x, 366, mw, 52, mid, col + "22", col, [short, f"w {w:.2f}"], ring=("#3fb950" if elig else None)))
+        p3c[mid] = (cx(x, mw), 418)
+        parts.append(f'<path d="M{mthb[0]},{mthb[1]} C{mthb[0]},334 {cx(x,mw)},334 {cx(x,mw)},366" fill="none" stroke="#22303e" stroke-width="0.7"/>')
         err = row.get("error")
         nodes[mid] = {"t": lab, "plug": plug,
-                      "sub": f"P3 · candidate ({'JSON hot-swap' if plug=='hot' and mid!='guidance' else 'guidance' if mid=='guidance' else 'code'})",
+                      "sub": f"P3 · Model ({'JSON hot-swap' if plug == 'hot' and mid != 'guidance' else 'guidance' if mid == 'guidance' else 'code'})",
                       "body": (f"backtest error: {err:.4f}<br>ensemble weight: {w:.2f}<br>"
                                f"eligible (beat seasonal-naive): {'yes' if elig else 'no'}<br>"
                                f"next-period prediction: {row.get('final_pred')}" if row else "not scored"),
                       "spec": (mnode[mid].spec if mid in mnode and mnode[mid].spec else None),
                       "producer": (mnode[mid].producer if mid in mnode else None)}
 
-    # P4 backtest + ensemble
-    bt_x, bt_w = 300, 230
-    parts.append(_rect(bt_x, 414, bt_w, 44, "backtest", "#1b222c", "#3a4658",
+    # P4 Backtesting
+    parts.append(_rect(300, 488, 230, 40, "backtest", "#1b222c", "#3a4658",
                        ["Rolling-origin backtest", "gate vs seasonal-naive · PIT"]))
-    en_x, en_w = 600, 170
-    parts.append(_rect(en_x, 414, en_w, 44, "ensemble", "#1b222c", "#3a4658",
-                       ["Capped ensemble", "inverse-error weights"]))
-    btc = (cx(bt_x, bt_w), 414); bto = (cx(bt_x, bt_w), 458)
-    enc = (cx(en_x, en_w), 414); eno = (cx(en_x, en_w), 458); enl = (en_x, cx(en_x, en_w))
-    nodes["backtest"] = {"t": "Rolling-origin backtest · gate", "plug": "no", "sub": "P4 · FIXED methodology",
-                         "body": "At each trailing origin, fit on data-up-to-then, predict next, score. "
-                                 "Drop any model that can't beat seasonal-naive. Change via code only."}
-    nodes["ensemble"] = {"t": "Capped inverse-error ensemble", "plug": "no", "sub": "P4 · FIXED",
-                         "body": "Survivors weighted by 1/error, capped at 0.60, renormalised. "
-                                 "= the learned weights of this network."}
-    # weighted edges model -> backtest
-    for mid, (mxb, myb, _, _) in p3c.items():
+    parts.append(_rect(600, 488, 170, 40, "ensemble", "#1b222c", "#3a4658",
+                       ["Capped ensemble", "learned weights"]))
+    btc = (415, 488); eno = (685, 528)
+    for mid, (mx, my) in p3c.items():
         row = lb.get(mid, {})
-        w = row.get("weight", 0.0)
+        wt = row.get("weight", 0.0)
         col = "#f0b768" if row.get("eligible") else "#2b3745"
-        sw = 0.6 + w * 7
-        parts.append(f'<path d="M{mxb},{myb} C{mxb},390 {btc[0]},390 {btc[0]},{btc[1]}" fill="none" stroke="{col}" stroke-width="{sw:.1f}" opacity="0.75"/>')
-    parts.append(f'<path d="M{bto[0]},{bto[1]} C{bto[0]},485 {enc[0]},485 {enc[0]},{enc[1]}" fill="none" stroke="#4a5a6e" stroke-width="2.4"/>')
+        parts.append(f'<path d="M{mx},{my} C{mx},458 {btc[0]},458 {btc[0]},488" fill="none" stroke="{col}" stroke-width="{0.6+wt*7:.1f}" opacity="0.75"/>')
+    parts.append(f'<line x1="530" y1="508" x2="600" y2="508" stroke="#4a5a6e" stroke-width="2.4"/>')
+    nodes["backtest"] = {"t": "Rolling-origin backtest · gate", "plug": "no", "sub": "P4 · Backtesting (executes methodology)",
+                         "body": "Executes the methodology: at each trailing origin fit on data-up-to-then, predict "
+                                 "next, score; drop anything that can't beat seasonal-naive."}
+    nodes["ensemble"] = {"t": "Capped inverse-error ensemble", "plug": "no", "sub": "P4 · Backtesting",
+                         "body": "Survivors weighted by 1/error, capped, renormalised = the learned weights."}
 
-    # P5 govern + emit
-    gd_x, gd_w = 320, 170
-    parts.append(_rect(gd_x, 532, gd_w, 40, "guardrail", "#16241b", "#2f6b43", ["Guardrail band", "point ± ens-error"]))
-    wb_x, wb_w = 560, 170
-    parts.append(_rect(wb_x, 532, wb_w, 40, "emit", "#16241b", "#2f6b43", ["Workbook (xlsx)", "Summary sheet"]))
-    gdc = (cx(gd_x, gd_w), 532)
-    parts.append(f'<path d="M{eno[0]},{eno[1]} C{eno[0]},505 {gdc[0]},505 {gdc[0]},532" fill="none" stroke="#3a6b47" stroke-width="2"/>')
-    parts.append(f'<path d="M{cx(gd_x,gd_w)},572 C{cx(gd_x,gd_w)},595 {cx(wb_x,wb_w)},595 {cx(wb_x,wb_w)},572" fill="none" stroke="#3a6b47" stroke-width="1.6" stroke-dasharray="0"/>')
-    parts.append(f'<line x1="{gd_x+gd_w}" y1="552" x2="{wb_x}" y2="552" stroke="#3a6b47" stroke-width="2"/>')
-    nodes["guardrail"] = {"t": "Guardrail band", "plug": "no", "sub": "P5 · FIXED",
+    # P5 Output
+    parts.append(_rect(320, 584, 170, 40, "guardrail", "#16241b", "#2f6b43", ["Guardrail band", "point ± ens-error"]))
+    parts.append(_rect(560, 584, 170, 40, "emit", "#16241b", "#2f6b43", [fc["output_file"], "Summary sheet"]))
+    parts.append(f'<path d="M{eno[0]},{eno[1]} C{eno[0]},558 405,558 405,584" fill="none" stroke="#3a6b47" stroke-width="2"/>')
+    parts.append(f'<line x1="490" y1="604" x2="560" y2="604" stroke="#3a6b47" stroke-width="2"/>')
+    nodes["guardrail"] = {"t": "Guardrail band", "plug": "no", "sub": "P5 · Output",
                           "body": f"Point {_fmt(mf.point, mf.kind) if mf and mf.point is not None else '—'} "
-                                  f"± ensemble error → band. Consensus clamp seam (corpus-only for now)."}
-    nodes["emit"] = {"t": "Workbook writer", "plug": "no", "sub": "P5 · FIXED",
-                     "body": f"Writes submission/{fc['output_file']} — fills the Summary sheet, leaves structure intact."}
+                                  f"± ensemble error → band. Consensus-clamp seam (corpus-only for now)."}
+    nodes["emit"] = {"t": "Workbook writer", "plug": "no", "sub": "P5 · Output",
+                     "body": f"Writes submission/{fc['output_file']} — fills the Summary-sheet cell for this metric."}
     parts.append("</svg>")
     return "".join(parts), nodes
+
+
+def _pipeline_svg(manifest, spec):
+    """Unified view: the four companies flow through ONE pipeline into the output layer."""
+    W, H = 1060, 600
+    parts = [f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:1060px">']
+    nodes = {}
+    xs = [120, 360, 600, 840]
+    cos = manifest["companies"]
+
+    # band labels
+    for (lab, y, tag, col) in [("INPUT · four companies", 34, "company code + required output", "#6b7480"),
+                               ("SHARED PIPELINE", 152, "ingestion → methodology → model → backtesting", "#6aa0ff"),
+                               ("P5 · OUTPUT LAYER", 428, "4 workbooks · 12 numbers", "#3fb950")]:
+        parts.append(f'<text x="18" y="{y}" fill="{col}" style="font:600 11px sans-serif">{lab}</text>')
+        if tag:
+            parts.append(f'<text x="200" y="{y}" fill="#5c6470" style="font:10px sans-serif">{tag}</text>')
+
+    # input: 4 company nodes
+    incx = []
+    for c, x in zip(cos, xs):
+        wired = c["wired"]
+        col = "#6aa0ff" if wired else "#8b93a1"
+        badge = "" if wired else " ·pending"
+        parts.append(_rect(x, 46, 170, 46, f"co_{c['ticker']}", col + "1e", col,
+                           [f"{c['ticker']} · {c['company'][:16]}", f"{c['period']}{badge}"]))
+        incx.append(x + 85)
+        vals = "".join(f"{m['label']}: {(_fmt(m['point'], m['kind']) if m['point'] is not None else '—')} {m['units']}<br>"
+                       for m in c["metrics"])
+        nodes[f"co_{c['ticker']}"] = {"t": f"{c['company']} — input", "plug": "code" if wired else "no",
+                                      "sub": f"target {c['period']}", "body": (vals or "extractor pending")}
+
+    # shared core: ingestion → methodology → model → backtesting
+    ex = (430, 172, 158, 40)
+    parts.append(_rect(*ex, "u_extract", "#2a2312", "#7a5a1e", ["Extract → panel", "per company (ingestion)"]))
+    mth = (380, 226, 300, 34)
+    parts.append(_rect(*mth, "u_method", "#1a1f27", "#4a5568",
+                       ["Methodology 1 · click to read", "filing baseline + guidance — decides HOW"]))
+    nModels = len(governance.active_models("money"))
+    cd = (380, 288, 300, 40)
+    parts.append(_rect(*cd, "u_candidates", "#241a2b", "#7a5a1e",
+                       [f"Model layer · {nModels} nodes", "hot-swap registry + guidance"]))
+    bt = (350, 352, 170, 38); en = (560, 352, 150, 38)
+    parts.append(_rect(*bt, "u_backtest", "#1b222c", "#3a4658", ["Backtesting gate", "vs seasonal-naive · PIT"]))
+    parts.append(_rect(*en, "u_ensemble", "#1b222c", "#3a4658", ["Capped ensemble", "learned weights"]))
+    ex_cx = ex[0] + ex[2] / 2; mth_cx = mth[0] + mth[2] / 2; cd_cx = cd[0] + cd[2] / 2
+    for cx0 in incx:                                   # companies fan-in to the one pipeline
+        parts.append(f'<path d="M{cx0},92 C{cx0},120 {ex_cx},120 {ex_cx},{ex[1]}" fill="none" stroke="#2b3745" stroke-width="1"/>')
+    parts.append(f'<line x1="{ex_cx}" y1="{ex[1]+ex[3]}" x2="{mth_cx}" y2="{mth[1]}" stroke="#5a4620" stroke-width="1.4"/>')
+    parts.append(f'<line x1="{mth_cx}" y1="{mth[1]+mth[3]}" x2="{cd_cx}" y2="{cd[1]}" stroke="#3a4658" stroke-width="1.4"/>')
+    parts.append(f'<path d="M{cd_cx},{cd[1]+cd[3]} C{cd_cx},344 {bt[0]+bt[2]/2},344 {bt[0]+bt[2]/2},{bt[1]}" fill="none" stroke="#3a4658" stroke-width="1.6"/>')
+    parts.append(f'<line x1="{bt[0]+bt[2]}" y1="{bt[1]+bt[3]/2}" x2="{en[0]}" y2="{en[1]+en[3]/2}" stroke="#4a5a6e" stroke-width="2"/>')
+    nodes["u_extract"] = {"t": "Extract → period panel", "plug": "hot", "sub": "P1 · Data ingestion (hot-swap)",
+                          "body": "Text→panel per company: actuals series + issued guidance. Same extractor shape, one per company."}
+    nodes["u_method"] = {"t": methodology.METHODOLOGY_1["name"], "plug": "no",
+                         "sub": "P2 · FIXED / constitutional — the agent reads this and obeys it",
+                         "body": _methodology_html()}
+    nodes["u_candidates"] = {"t": f"Model layer · {nModels} nodes", "plug": "hot", "sub": "P3 · hot-swap registry",
+                             "body": "Parallel forecasters compete: seasonal/drift/trend/AR/ETS + guidance + JSON hot-swap nodes. Open a company+metric to see the learned weights."}
+    nodes["u_backtest"] = {"t": "Rolling-origin backtest · gate", "plug": "no", "sub": "P4 · Backtesting", "body": "PIT gate: drop anything that can't beat seasonal-naive."}
+    nodes["u_ensemble"] = {"t": "Capped inverse-error ensemble", "plug": "no", "sub": "P4 · Backtesting", "body": "Survivors weighted by 1/error (cap 0.60) → point + band."}
+
+    # output layer: 4 workbook nodes + an OUTPUT spec node
+    en_cx, en_cy = en[0] + en[2] / 2, en[1] + en[3]
+    for c, x in zip(cos, xs):
+        ready = c["wired"] and all(m["point"] is not None for m in c["metrics"])
+        col = "#3fb950" if ready else "#8b93a1"
+        summ = "  ".join(_fmt(m["point"], m["kind"]) for m in c["metrics"] if m["point"] is not None) or "pending"
+        parts.append(_rect(x, 448, 170, 46, f"out_{c['ticker']}", "#16241b", col,
+                           [c["file"], summ], ring=("#3fb950" if ready else None)))
+        ocx = x + 85
+        parts.append(f'<path d="M{en_cx},{en_cy} C{en_cx},420 {ocx},420 {ocx},448" fill="none" stroke="#3a6b47" stroke-width="1.3"/>')
+        mrows = "".join(f"<div class=kv><span>{html.escape(m['label'])} <span class=u>{m['units']}</span></span>"
+                        f"<span>{(_fmt(m['point'], m['kind']) if m['point'] is not None else '—')}</span></div>"
+                        for m in c["metrics"])
+        nodes[f"out_{c['ticker']}"] = {"t": f"{c['file']}", "plug": "no", "sub": "P5 · output workbook",
+                                       "body": f"Summary sheet for {c['company']} · {c['period']}.<br>{mrows}"}
+    # the OUTPUT spec node (what this whole layer emits)
+    parts.append(_rect(378, 520, 304, 40, "output_spec", "#12271a", "#2f6b43",
+                       [f"OUTPUT · {spec['n_numbers']} numbers → {len(spec['files'])} .xlsx", "click: what we emit"]))
+    contract = "".join(f"<div class=kv><span>{html.escape(x)}</span></div>" for x in spec["contract"])
+    filerows = "".join(f"<div class=kv><span>{f['file']}</span><span class=u>{', '.join(m['label'] for m in f['metrics'])}</span></div>"
+                       for f in spec["files"])
+    nodes["output_spec"] = {"t": "Output layer — the deliverable", "plug": "no", "sub": "P5 · FIXED / constitutional",
+                            "body": (f"<b>{spec['deliverable']}</b> — {spec['n_numbers']} numbers.<br><br>"
+                                     f"<b>Files</b>{filerows}<br><b>Contract</b>{contract}<br>"
+                                     f"<div class=kv><span>final command</span><span class=u>python -m agent.run</span></div>"
+                                     f"<div class=kv><span>checker</span><span class=u>{spec['checker']}</span></div>"
+                                     f"<div class=kv><span>upload</span><span class=u>manual</span></div>")}
+    parts.append("</svg>")
+    return "".join(parts), nodes
+
+
+# adapter approach -> which methodology-owned model-approach node handles it
+_APPROACH_NODE = {
+    "guidance": "app_guidance", "guide_reversion": "app_guidance", "stated": "app_guidance",
+    "seasonal": "app_seasonal", "series_trend": "app_seasonal", "series_growth": "app_seasonal",
+    "seasonal_segment": "app_seasonal",
+    "bridge": "app_bridge", "fy_ni_bridge": "app_bridge", "segment_margin": "app_bridge",
+}
+_APPROACH_META = {
+    "app_guidance": ("Guidance anchor", "management's published numbers",
+                     "Anchor to management guidance: midpoint, stated range, or reversion toward the guide. "
+                     "Methodology 1 §5 guidance calibration. Metrics: ADI Rev/EPS, HD comp, HAS OP."),
+    "app_seasonal": ("Seasonal + trend", "historical anchor + recent growth",
+                     "Same-quarter seasonal anchor + recent-trend adjustment on the extracted actual series. "
+                     "Methodology 1 §5 seasonal anchor + recent-trend. Metrics: HD net sales/EPS, ADI GM, HAS net fees, DE net sales."),
+    "app_bridge": ("Accounting bridge", "EPS / OP via financial identities",
+                   "Derive via accounting identities: EPS = after-tax profit ÷ shares; operating profit = base × margin/conversion; "
+                   "segment sales × margin. Methodology 1 §4/§9. Metrics: DE EPS & PPA OP, HAS EPS."),
+}
+
+
+def _approach_html(aid):
+    A = methodology.MODEL_APPROACHES[aid]
+    formulas = "<pre>" + "\n".join(html.escape(f) for f in A["formulas"]) + "</pre>"
+    metrics = ("<ul class=u style='margin:4px 0;padding-left:18px'>"
+               + "".join(f"<li>{html.escape(m)}</li>" for m in A["metrics"]) + "</ul>")
+    return (f"<div class=u style='margin-bottom:6px'>{html.escape(A['desc'])}</div>"
+            f"<b class=u>Formulas</b>{formulas}<b class=u>Metrics it handles</b>{metrics}")
+
+
+def _combined_svg(manifest, spec):
+    """One combined network graph (current form): four companies → ingestion →
+    Methodology 1 → the model approaches Methodology 1 OWNS → stats control →
+    output. The deferred candidate/backtest/ensemble nodes are removed."""
+    W, H = 1060, 700
+    parts = [f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:1060px">']
+    nodes = {}
+    xs = [120, 360, 600, 840]
+    cos = manifest["companies"]
+
+    def band(lab, y, tag, col):
+        parts.append(f'<text x="18" y="{y}" fill="{col}" style="font:600 11px sans-serif">{lab}</text>')
+        if tag:
+            parts.append(f'<text x="210" y="{y}" fill="#5c6470" style="font:10px sans-serif">{tag}</text>')
+
+    band("INPUT · four companies", 30, "company code + required output", "#6b7480")
+    band("P1 · DATA INGESTION", 122, "corpus → extract → panel", "#6aa0ff")
+    band("P2 · METHODOLOGY 1", 258, "fixed — decides HOW and owns the model approaches", "#8b93a1")
+    band("P3 · MODEL APPROACHES", 350, "owned by Methodology 1 (backtesting deferred)", "#f0b768")
+    band("P4 · STATS CONTROL", 458, "validate each number after the approaches", "#8b93a1")
+    band("P5 · OUTPUT LAYER", 530, "4 workbooks · 12 numbers", "#3fb950")
+
+    # INPUT — four companies
+    incx = []
+    for c, x in zip(cos, xs):
+        parts.append(_rect(x, 42, 170, 44, f"co_{c['ticker']}", "#6aa0ff1e", "#6aa0ff",
+                           [f"{c['ticker']} · {c['company'][:16]}", c["period"]]))
+        incx.append(x + 85)
+        vals = "".join(f"{m['label']}: {(_fmt(m['point'], m['kind']) if m['point'] is not None else '—')} {m['units']}<br>"
+                       for m in c["metrics"])
+        nodes[f"co_{c['ticker']}"] = {"t": f"{c['company']} — input", "plug": "code",
+                                      "sub": f"required output · {c['period']}", "body": vals}
+
+    # P1 ingestion — sources → extract
+    for (nid, label), x in zip([("src_filings", "Filings"), ("src_transcripts", "Transcripts"),
+                                ("src_slides", "Slides")], [300, 520, 740]):
+        parts.append(_rect(x, 132, 140, 28, nid, "#1a2531", "#33506e", [label]))
+        parts.append(f'<path d="M{x+70},160 C{x+70},178 520,178 520,190" fill="none" stroke="#2b3745" stroke-width="0.8"/>')
+        nodes[nid] = {"t": label, "plug": "code", "sub": "P1 · Data ingestion",
+                      "body": "Frozen corpus document type (priority: filings > release > slides > call > Q&A)."}
+    ex = (430, 190, 200, 42)
+    parts.append(_rect(*ex, "u_extract", "#2a2312", "#7a5a1e",
+                       ["Extract → period panel", "per company · actuals + guidance"]))
+    excx = ex[0] + ex[2] / 2
+    for cx0 in incx:
+        parts.append(f'<path d="M{cx0},86 C{cx0},112 {excx},112 {excx},{ex[1]}" fill="none" stroke="#2b3745" stroke-width="1"/>')
+    nodes["u_extract"] = {"t": "Extractor → period panel", "plug": "hot", "sub": "P1 · Data ingestion (hot-swap)",
+                          "body": "Text→panel per company: historical actuals series + issued guidance, event-deduped."}
+
+    # P2 Methodology 1
+    mth = (380, 268, 300, 40)
+    parts.append(_rect(*mth, "methodology", "#1a1f27", "#4a5568",
+                       ["Methodology 1 · click to read", "filing baseline + guidance — owns ↓ approaches"]))
+    parts.append(f'<line x1="{excx}" y1="{ex[1]+ex[3]}" x2="{mth[0]+mth[2]/2}" y2="{mth[1]}" stroke="#5a4620" stroke-width="1.4"/>')
+    mthcx = mth[0] + mth[2] / 2
+    nodes["methodology"] = {"t": methodology.METHODOLOGY_1["name"], "plug": "no",
+                            "sub": "P2 · FIXED / constitutional — the agent reads this and obeys it",
+                            "body": _methodology_html()}
+
+    # P3 model approaches — OWNED by Methodology 1 (dashed container = belonging)
+    parts.append('<rect x="150" y="356" width="760" height="88" rx="11" fill="#1d160c" '
+                 'stroke="#7a5a1e" stroke-dasharray="5 4" opacity="0.85"/>')
+    parts.append('<text x="164" y="372" fill="#f0b768" style="font:10px sans-serif">▸ owned by Methodology 1</text>')
+    app_xy = {"app_guidance": (200, 384, 200, 46), "app_seasonal": (430, 384, 200, 46),
+              "app_bridge": (660, 384, 200, 46)}
+    for aid, (x, y, w, h) in app_xy.items():
+        t, sub, _ = _APPROACH_META[aid]
+        parts.append(_rect(x, y, w, h, aid, "#2a2013", "#c78a34", [t, sub]))
+        parts.append(f'<path d="M{mthcx},{mth[1]+mth[3]} C{mthcx},350 {x+w/2},350 {x+w/2},{y}" '
+                     f'fill="none" stroke="#5a4620" stroke-width="1" stroke-dasharray="3 3"/>')
+        nodes[aid] = {"t": f"{t} — model approach", "plug": "hot",
+                      "sub": "P3 · owned by Methodology 1 · formulas ↓", "body": _approach_html(aid)}
+
+    # P4 stats control — validate the produced numbers (backtesting deferred)
+    parts.append(f'<line x1="530" y1="444" x2="530" y2="470" stroke="#3a4658" stroke-width="1.4"/>')
+    parts.append(_rect(360, 470, 340, 38, "stats_control", "#1b222c", "#3a4658",
+                       ["Stats control · validate", "finite · range · sign · band — §11 checks"]))
+    from . import stats_control as _sc
+    summ_sc = {"pass": 0, "warn": 0, "fail": 0, "n": 0}
+    for c in cos:                                     # per company so duplicate labels (EPS) aren't merged
+        r = _sc.summarize(_sc.validate(c["metrics"]))
+        for k in summ_sc:
+            summ_sc[k] += r[k]
+    checkdoc = "".join(f"<div class=kv><span>{html.escape(x)}</span></div>" for x in _sc.CHECKS_DOC)
+    nodes["stats_control"] = {"t": "Stats control — validate", "plug": "no",
+                              "sub": "P4 · runs after the model approaches, before output",
+                              "body": (f"Deterministic control gate on every produced number "
+                                       f"(Methodology 1 §11 units + consistency; §13 never hide failures).<br>"
+                                       f"<div class=kv><span>latest run</span><span>"
+                                       f"{summ_sc['pass']} pass · {summ_sc['warn']} warn · {summ_sc['fail']} fail "
+                                       f"/ {summ_sc['n']}</span></div><br><b class=u>Checks</b>{checkdoc}")}
+
+    # P5 output — four workbooks + OUTPUT spec
+    for c, x in zip(cos, xs):
+        ready = c["wired"] and all(m["point"] is not None for m in c["metrics"])
+        col = "#3fb950" if ready else "#8b93a1"
+        summ = "  ".join(_fmt(m["point"], m["kind"]) for m in c["metrics"] if m["point"] is not None) or "pending"
+        parts.append(_rect(x, 542, 170, 46, f"out_{c['ticker']}", "#16241b", col, [c["file"], summ],
+                           ring=("#3fb950" if ready else None)))
+        parts.append(f'<path d="M530,508 C530,526 {x+85},526 {x+85},542" fill="none" stroke="#3a6b47" stroke-width="1.2"/>')
+        mrows = "".join(f"<div class=kv><span>{html.escape(m['label'])} <span class=u>{m['units']}</span></span>"
+                        f"<span>{(_fmt(m['point'], m['kind']) if m['point'] is not None else '—')}</span></div>"
+                        for m in c["metrics"])
+        nodes[f"out_{c['ticker']}"] = {"t": c["file"], "plug": "no", "sub": "P5 · output workbook",
+                                       "body": f"Summary sheet for {c['company']} · {c['period']}.<br>{mrows}"}
+    parts.append(_rect(378, 618, 304, 38, "output_spec", "#12271a", "#2f6b43",
+                       [f"OUTPUT · {spec['n_numbers']} numbers → {len(spec['files'])} .xlsx", "click: what we emit"]))
+    for x in xs:
+        parts.append(f'<line x1="{x+85}" y1="588" x2="530" y2="618" stroke="#284d33" stroke-width="0.7"/>')
+    filerows = "".join(f"<div class=kv><span>{f['file']}</span><span class=u>{', '.join(m['label'] for m in f['metrics'])}</span></div>"
+                       for f in spec["files"])
+    contract = "".join(f"<div class=kv><span>{html.escape(x)}</span></div>" for x in spec["contract"])
+    nodes["output_spec"] = {"t": "Output layer — the deliverable", "plug": "no", "sub": "P5 · FIXED",
+                            "body": (f"<b>{spec['deliverable']}</b> — {spec['n_numbers']} numbers.<br><br>"
+                                     f"<b>Files</b>{filerows}<br><b>Contract</b>{contract}")}
+    parts.append("</svg>")
+    return "".join(parts), nodes
+
+
+def _modal_js(nodes):
+    return ("<div id=ov onclick=\"if(event.target.id=='ov')hide()\"><div id=panel></div></div>"
+            f"<script>var N={_json.dumps(nodes)};"
+            "function show(id){var n=N[id];if(!n)return;var h='<span class=x onclick=hide()>close ✕</span>';"
+            "h+='<h3>'+n.t+'</h3><div class=u>'+n.sub+'</div>';"
+            "h+='<div class=kv><span>plug</span><span>'+n.plug+'</span></div>';"
+            "if(n.body)h+='<div style=\"margin:10px 0\">'+n.body+'</div>';"
+            "if(n.producer)h+='<div class=kv><span>code producer</span><span>'+n.producer+'</span></div>';"
+            "if(n.spec)h+='<pre>'+JSON.stringify(n.spec,null,2)+'</pre>';"
+            "document.getElementById('panel').innerHTML=h;document.getElementById('ov').style.display='flex';}"
+            "function hide(){document.getElementById('ov').style.display='none';}</script>")
 
 
 @app.get("/graph")
 def graph():
     from flask import request
-    ticker = (request.args.get("t") or "ADI").upper()
-    if ticker not in METRIC_MAP:
+    if not request.args.get("t"):
+        manifest = output.run_pipeline(write=False)
+        spec = output.output_spec()
+        svg, nodes = _combined_svg(manifest, spec)
+        focus = "".join(f"<a class=phase href='/graph?t={t}'>{t} detail →</a>" for t in TICKERS)
+        legend = ("<div class=leg>Node plug: <span class=sw style='background:#f0b768'></span>hot-swap"
+                  "<span class=sw style='background:#6aa0ff'></span>code"
+                  "<span class=sw style='background:#8b93a1'></span>fixed / pending"
+                  "<span class=sw style='background:#3fb950'></span>ready output</div>")
+        run_card = ("<div class=card><button id=runbtn onclick='runPipe()'>▶ Run pipeline</button> "
+                    "<span class=u>runs all four companies through the pipeline — nodes light up as the agent runs them</span>"
+                    "<div id=runlog>click ▶ Run to watch the agent step through the nodes…</div></div>")
+        run_js = ("<script>function runPipe(){var b=document.getElementById('runbtn');b.disabled=true;b.textContent='running…';"
+                  "var L=document.getElementById('runlog');L.textContent='';"
+                  "document.querySelectorAll('.gnode').forEach(function(g){g.classList.remove('run','done');});"
+                  "var es=new EventSource('/api/run');var prev=null;"
+                  "es.onmessage=function(e){var d=JSON.parse(e.data);"
+                  "if(d.node){var id='n_'+d.node;if(prev&&prev!=id){var p=document.getElementById(prev);"
+                  "if(p){p.classList.remove('run');p.classList.add('done');}}"
+                  "var el=document.getElementById(id);if(el)el.classList.add('run');prev=id;}"
+                  "if(d.log){var s=document.createElement('div');if(d.cls)s.className=d.cls;s.textContent=d.log;"
+                  "L.appendChild(s);L.scrollTop=L.scrollHeight;}"
+                  "if(d.done){es.close();b.disabled=false;b.textContent='▶ Run again';b.classList.add('g');"
+                  "var el=document.getElementById('n_'+d.node);if(el)el.classList.add('run');}};"
+                  "es.onerror=function(){es.close();b.disabled=false;b.textContent='▶ Run pipeline';};}</script>")
+        body = (f"<h1>One pipeline · four companies · one output layer</h1>"
+                f"<div class=sub>All four companies flow through the same governed pipeline; the "
+                f"<b>output layer</b> emits the {spec['n_numbers']} numbers as {len(spec['files'])} workbooks. "
+                f"Click a node to inspect it; click ▶ Run to watch the agent execute them.</div>"
+                f"{run_card}"
+                f"{legend}<div class=card style='padding:10px'>{svg}</div>"
+                f"<div class=card><b>{manifest['n_filled']}/{manifest['n_total']} numbers produced</b> "
+                f"· {manifest['wired']}/4 companies wired · <a href='/output'>output detail →</a></div>"
+                f"<div>Drill into learned weights: {focus}</div>"
+                f"<a href='/'>← overview</a>{_modal_js(nodes)}{run_js}")
+        return Response(_page("Pipeline", body), mimetype="text/html")
+    ticker = request.args.get("t", "ADI").upper()
+    if ticker not in FOLDER:
         ticker = "ADI"
     fc = forecast_company(ticker)
     labels = [m.label for m in fc["metrics"]]
@@ -344,9 +702,16 @@ def graph():
     mf = next((m for m in fc["metrics"] if m.label == sel), fc["metrics"][0])
     svg, nodes = _graph_svg(fc, mf)
 
-    tsel = "".join(f"<a class=phase href='/graph?t={t}'>{t}</a>" for t in TICKERS if t in METRIC_MAP)
+    # company selector: all four; selected highlighted; unwired marked pending
+    tsel = ""
+    for t in TICKERS:
+        on = t == ticker
+        pend = "" if t in METRIC_MAP else " ·pending"
+        style = "background:#22303e;color:#e6e9ef" if on else ("opacity:.55" if pend else "")
+        tsel += f"<a class=phase href='/graph?t={t}' style=\"{style}\">{t}{pend}</a>"
+    # metric selector: this company's required metrics (companies.json); selected highlighted
     msel = "".join(f"<a class=phase href='/graph?t={ticker}&m={html.escape(l)}' "
-                   f"style=\"{'background:#22303e;color:#e6e9ef' if l==sel else ''}\">{html.escape(l)}</a>"
+                   f"style=\"{'background:#22303e;color:#e6e9ef' if l == sel else ''}\">{html.escape(l)}</a>"
                    for l in labels)
     legend = ("<div class=leg>Node plug: <span class=sw style='background:#f0b768'></span>hot-swap (JSON)"
               "<span class=sw style='background:#6aa0ff'></span>code"
@@ -389,6 +754,64 @@ def graph():
             f"{legend}<div class=card style='padding:10px'>{svg}</div>{form}"
             f"<a href='/'>← overview</a> · <a href='/c/{ticker}'>metric detail →</a>{js}")
     return Response(_page("Graph", body), mimetype="text/html")
+
+
+@app.get("/api/run")
+def api_run():
+    """Run the whole pipeline and stream node-by-node events (SSE) so the graph can
+    light up the nodes the agent is running, with a live thinking log."""
+    def sse(d):
+        return f"data: {_json.dumps(d)}\n\n"
+
+    def gen():
+        yield sse({"node": "methodology", "cls": "n",
+                   "log": "▸ Reading Methodology 1 — filing baseline + guidance calibration (the agent obeys this)"})
+        time.sleep(0.5)
+        done = 0
+        for t in output.TICKERS:
+            a = methodology.adapter(t)
+            sp = company_spec(t)
+            yield sse({"node": f"co_{t}", "cls": "n",
+                       "log": f"● {t} · {a.get('name', t)} — input: (company code, required output · {sp['period']})"})
+            time.sleep(0.3)
+            yield sse({"node": "u_extract", "log": f"   P1 · ingest → extract period panel  ({t})"})
+            time.sleep(0.3)
+            d = direct.forecast(t)
+            metrics = []
+            for m in sp["metrics"]:
+                lbl = m["label"]
+                mm = d["metrics"].get(lbl)
+                metrics.append({"label": lbl, "units": m["units"], "band": mm["band"] if mm else None,
+                                "point": mm["point"] if mm else None, "kind": mm["kind"] if mm else None})
+                approach = a.get("metrics", {}).get(lbl, {}).get("approach", "")
+                anode = _APPROACH_NODE.get(approach, "app_seasonal")
+                aname = _APPROACH_META.get(anode, ("", ""))[0]
+                val = mm["point"] if mm else "—"
+                basis = (mm["basis"][:50] if mm else "")
+                yield sse({"node": anode, "cls": "d",
+                           "log": f"   P3 · {aname} → {lbl} = {val}  [{basis}]"})
+                if mm and mm["point"] is not None:
+                    done += 1
+                time.sleep(0.22)
+            # P4 · stats control validation (after approaches, before output)
+            from . import stats_control as _sc
+            res = _sc.validate(metrics)
+            sm = _sc.summarize(res)
+            yield sse({"node": "stats_control", "cls": "n",
+                       "log": f"   P4 · stats control → {sm['pass']} pass · {sm['warn']} warn · {sm['fail']} fail"})
+            for lbl, r in res.items():
+                if r["verdict"] != "pass":
+                    bad = ", ".join(c["name"] for c in r["checks"] if not c["ok"])
+                    yield sse({"cls": "d", "log": f"        {'✗' if r['verdict']=='fail' else '⚠'} {lbl}: {r['verdict']} ({bad})"})
+            time.sleep(0.3)
+            path = workbook.write_direct(sp["outputFile"], sp["period"], metrics)
+            yield sse({"node": f"out_{t}", "cls": "n", "log": f"   P5 · output → wrote {os.path.basename(path)}"})
+            time.sleep(0.3)
+        yield sse({"node": "output_spec", "cls": "n", "done": True,
+                   "log": f"✓ done — {done}/12 numbers → 4 workbooks in submission/  (npm run check:submission)"})
+
+    return Response(gen(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/validate")

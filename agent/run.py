@@ -1,30 +1,21 @@
-"""One command -> all available company workbooks in submission/.
+"""One command -> four workbooks in submission/ (Methodology 1, direct output).
 
     uv run --with-requirements agent/requirements.txt python -m agent.run
-
-This is the shape of the challenge's required "final command". Companies without a
-wired extractor are skipped with a clear notice (no silent gaps).
 """
 from __future__ import annotations
 
-from .forecast import forecast_company, METRIC_MAP
-from . import workbook
-
-TICKERS = ["HD", "ADI", "HAS", "DE"]
+from . import output, methodology
 
 
 def main() -> None:
-    for t in TICKERS:
-        if t not in METRIC_MAP:
-            print(f"SKIP {t:4} — extractor pending")
-            continue
-        fc = forecast_company(t)
-        path = workbook.write_workbook(fc)
-        vals = "  ".join(
-            f"{m.label}={m.point:.2f}" for m in fc["metrics"] if m.point is not None
-        )
-        print(f"OK   {t:4} -> {path}")
-        print(f"        {vals}")
+    print(methodology.METHODOLOGY_1["name"], "· direct output (backtesting deferred)")
+    manifest = output.run_pipeline(write=True)
+    for c in manifest["companies"]:
+        print(f"\n{c['ticker']:4} -> {c['written']}")
+        for m in c["metrics"]:
+            v = m["point"]
+            print(f"     {m['label']:42} {v if v is not None else '—'} {m['units']}")
+    print(f"\n{manifest['n_filled']}/{manifest['n_total']} numbers · run `npm run check:submission`")
 
 
 if __name__ == "__main__":
