@@ -66,8 +66,9 @@ a non-fallback deployment ensemble with positive skill. Metrics without enough h
 remain on the auditable direct forecast.
 
 Historical ingestion is point-in-time and frequency-aware: quarterly US series use
-season 4, while Hays H1/FY observations use a semiannual season 2. The frozen corpus
-currently supports honest prequential diagnostics for 10 of 12 target metrics.
+season 4, while Hays H1/FY observations use a semiannual season 2. With the research agent
+reading the corpus, all 12 target metrics now support honest prequential diagnostics, and
+8 of them pass the production gate.
 
 ### Research agent (`agent/research.py`)
 

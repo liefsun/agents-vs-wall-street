@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from agent import history, prequential
+from agent import history, prequential, research
 from agent.corpus import Doc
 
 
@@ -58,19 +58,33 @@ class HistoricalSeriesTests(unittest.TestCase):
         self.assertEqual(by_period["Q2 2023"], 2170.0)
         self.assertGreaterEqual(len(ppa.observations), 20)
 
-    def test_short_adjusted_eps_history_remains_explicitly_skipped(self):
-        adjusted_eps = history.series_for("HD", "Adjusted diluted EPS")
-        self.assertIsNotNone(adjusted_eps)
-        result = prequential.backtest_metric("HD", "Adjusted diluted EPS", "eps")
+    def test_research_agent_extends_the_short_adjusted_eps_history(self):
+        """The deterministic parser finds 7; the agent reads more without loosening a gate.
 
-        self.assertEqual(len(adjusted_eps.observations), 7)
-        self.assertTrue(result["insufficient"])
+        Home Depot's adjusted EPS is a recent non-GAAP disclosure, so most of the corpus
+        genuinely does not state it. The agent refuses to substitute GAAP EPS on those
+        filings — the extra observations come from documents that do state the adjusted
+        figure, not from a relaxed definition.
+        """
+        parsed = history._SERIES_BUILDERS[("HD", "Adjusted diluted EPS")]()
+        self.assertEqual(len(parsed.observations), 7, "deterministic parser baseline")
 
-    def test_frozen_corpus_supports_ten_prequential_metrics(self):
+        if not research.available():
+            self.skipTest("no API key and no committed answers to replay")
+
+        merged = history.series_for("HD", "Adjusted diluted EPS")
+        self.assertIsNotNone(merged)
+        self.assertGreater(len(merged.observations), len(parsed.observations))
+
+    def test_every_target_metric_becomes_scoreable_with_the_agent(self):
+        if not research.available():
+            self.skipTest("no API key and no committed answers to replay")
+
         rows = prequential.run_all()
 
         self.assertEqual(len(rows), 12)
-        self.assertEqual(sum(not row.get("insufficient") for row in rows), 10)
+        scoreable = sum(not row.get("insufficient") for row in rows)
+        self.assertEqual(scoreable, 12, f"expected all 12 scoreable, got {scoreable}")
 
 
 if __name__ == "__main__":

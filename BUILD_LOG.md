@@ -53,3 +53,31 @@ This log records competition-specific work created after the official build star
 - Not yet exercised end to end: no `OPENAI_API_KEY` was configured at the time of writing,
   so the agent path has been verified against a stubbed driver only. Until a key is set the
   pipeline runs on the deterministic parsers.
+
+## 2026-08-16 — Research agent run against the full corpus
+
+- A key was configured and the agent read every candidate document for all twelve metrics
+  (about 500 documents, roughly two seconds each). Answers are cached and committed.
+- Coverage rose from 10/12 to **12/12** scoreable metrics. Outer evaluation now reports 83
+  unseen predictions over 28 company-rounds at 0.783 relative MAE — **21.7% skill**, against
+  21.9% over 66 predictions before. The headline is flat; the evidence base is a fifth larger
+  and no metric is excluded.
+- The production gate now promotes **8 of 12** metrics, up from 7. Home Depot's comparable
+  sales moved from direct to nested at 37.9% outer skill, on 39 observations rather than 13.
+- Two checks were added after real failures observed on live output:
+  - The agent was returning full-year totals from Q4 releases whose metadata says `FY`. The
+    prompt now states that a fiscal-year label on a quarterly target means report Q4.
+  - A reported value must now appear in its own supporting quote, allowing for thousands,
+    millions and billions scaling. Verifying that the sentence exists proved the agent had
+    not invented a source; it did not prove the number came from that sentence.
+- The cross-check policy was rewritten after ADI Q3 2020 exposed it. The parser had matched
+  "expected revenue of $8.2 billion on a pro forma basis" from the Maxim merger announcement;
+  the agent read `Revenue $ 1,456,136` from that quarter's 10-Q. Dropping both on disagreement
+  discarded the correct value and then fell back to the series holding the wrong one. The
+  reading that can show its evidence now wins, and the parser fills only gaps. ADI revenue's
+  measured skill went from 49.8% to 62.1%.
+- `agent/cache/research/` is now committed on purpose. A run with the key suppressed produces
+  byte-identical series to a run with it, which is what makes the reproducibility claim in the
+  architecture page true rather than aspirational.
+- Verification: 44 tests pass. Ruff is clean on the new and edited modules. The four workbooks
+  regenerate in about seven seconds with no network calls, and `npm run check:forecasts` passes.

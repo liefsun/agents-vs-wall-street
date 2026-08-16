@@ -500,34 +500,44 @@ def _researched_candidates(brief, llm) -> tuple[list[_Candidate], list]:
 def cross_check(
     researched: HistoricalSeries, parsed: HistoricalSeries | None
 ) -> tuple[HistoricalSeries, list[dict]]:
-    """Drop periods where the agent and the deterministic parser materially disagree."""
+    """Merge the agent's readings with the parser's, and record where they disagree.
+
+    The agent wins a disagreement. Its value carries a sentence that was checked to exist
+    in the source and to contain the number itself; the parser's value is an unverified
+    pattern match. Deferring to the parser here would have shipped ADI's Q3 2020 revenue as
+    8,200 — a pro-forma figure lifted from a merger announcement — instead of the 1,456
+    stated in that quarter's income statement.
+
+    The parser is still useful: it fills periods the agent never returned, so coverage is
+    the union of the two rather than whichever one happened to find more.
+    """
 
     if parsed is None:
         return researched, []
 
-    parsed_by_key = {item.key: item for item in parsed.observations}
-    kept, disagreements = [], []
-    for item in researched.observations:
-        other = parsed_by_key.get(item.key)
+    agent_by_key = {item.key: item for item in researched.observations}
+    disagreements = []
+    for item in parsed.observations:
+        other = agent_by_key.get(item.key)
         if other is None:
-            kept.append(item)
+            agent_by_key[item.key] = item        # parser fills a gap the agent left
             continue
         scale = max(abs(item.value), abs(other.value), 1e-9)
         gap = abs(item.value - other.value) / scale
-        if gap <= CROSS_CHECK_TOLERANCE:
-            kept.append(item)
-            continue
-        disagreements.append({
-            "ticker": researched.ticker, "label": researched.label, "period": item.period,
-            "agent_value": item.value, "parser_value": other.value,
-            "relative_gap": gap, "agent_source": item.source, "agent_quote": item.snippet,
-            "resolution": "period dropped — agent and parser disagree beyond tolerance",
-        })
+        if gap > CROSS_CHECK_TOLERANCE:
+            disagreements.append({
+                "ticker": researched.ticker, "label": researched.label, "period": other.period,
+                "agent_value": other.value, "parser_value": item.value,
+                "relative_gap": gap, "agent_source": other.source, "agent_quote": other.snippet,
+                "resolution": "kept the agent's value — it is corroborated by a quote",
+            })
+
+    merged = tuple(agent_by_key[key] for key in sorted(agent_by_key))
     return (
         HistoricalSeries(
             ticker=researched.ticker, label=researched.label, kind=researched.kind,
             units=researched.units, frequency=researched.frequency,
-            observations=tuple(kept),
+            observations=merged,
         ),
         disagreements,
     )
@@ -544,7 +554,9 @@ def researched_series_for(
     if brief is None:
         return None, []
     llm = llm or research.LLM()
-    if not llm.available:
+    # A live key is not required: committed answers replay offline, which is what lets a
+    # reviewer reproduce the submitted numbers without credentials.
+    if not (llm.available or research.has_cached_answers()):
         return None, []
     candidates, attempts = _researched_candidates(brief, llm)
     if not candidates:
@@ -562,9 +574,11 @@ def researched_series_for(
 def series_for(ticker: str, label: str) -> HistoricalSeries | None:
     """Return one audited history, or ``None`` for an unknown target metric.
 
-    The research agent is the primary reader: its observations carry the sentence they
-    came from. The deterministic parser stays on as an independent cross-check, and is
-    the fallback whenever the agent is unavailable or finds less than the parser did.
+    The research agent is the primary reader: its observations carry the sentence they came
+    from, checked to exist in the source and to contain the reported number. The parser
+    fills periods the agent did not return, and is the whole series when the agent is
+    unavailable. Coverage is therefore the union of the two, and a disagreement is resolved
+    in favour of the reading that can show its evidence.
     """
 
     builder = _SERIES_BUILDERS.get((ticker, label))
@@ -574,7 +588,5 @@ def series_for(ticker: str, label: str) -> HistoricalSeries | None:
     if researched is None:
         return parsed
 
-    checked, _disagreements = cross_check(researched, parsed)
-    if parsed is not None and len(checked.observations) < len(parsed.observations):
-        return parsed          # never trade coverage away for provenance
-    return checked
+    merged, _disagreements = cross_check(researched, parsed)
+    return merged

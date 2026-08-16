@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent architecture — TEAM NAME</title>
+  <title>Aquara Navigator — agent architecture</title>
   <style>
     :root {
       color-scheme: light;
@@ -77,7 +77,7 @@
 <body>
   <main>
     <p class="eyebrow">Agents vs Wall Street · 16 August 2026</p>
-    <h1><span class="fill">TEAM NAME</span></h1>
+    <h1>Aquara</h1>
     <p class="lede">
       An analyst agent that reads the filings itself, is not allowed to state a number it
       cannot quote, and hands every figure to a causal backtest that decides — from unseen
@@ -85,11 +85,11 @@
     </p>
 
     <div class="card">
-      <p>Agent name: <strong><span class="fill">AGENT NAME</span></strong></p>
-      <p>Team: <strong><span class="fill">NAME, NAME</span></strong> <span style="color:var(--faint)">(contact details are in the private entry record, not on this page)</span></p>
+      <p>Agent name: <strong>Aquara Navigator</strong></p>
+      <p>Team: <strong>Boxuan Wang, Hao Sun</strong> <span style="color:var(--faint)">(contact details are in the private entry record, not on this page)</span></p>
       <p>Build harness: <strong>Claude Code (Opus 5) and OpenAI Codex</strong> — our normal unmodified coding harness, declared in <code>entry.json</code>; work was done on a shared private repository through pull requests</p>
-      <p>Runtime model: <strong><span class="fill">gpt-4o-mini — CONFIRM</span></strong>, temperature 0, disk-cached</p>
-      <p>Repository: <strong><span class="fill">github.com/…</span></strong> · final commit <code><span class="fill">HASH</span></code></p>
+      <p>Runtime model: <strong>OpenAI gpt-4o-mini</strong>, temperature 0, disk-cached</p>
+      <p>Repository: <strong>github.com/liefsun/agents-vs-wall-street</strong> · final commit <code><span class="fill">HASH</span></code></p>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════════════ -->
@@ -197,11 +197,11 @@
 
           <rect class="bx" x="96" y="724" width="272" height="46" rx="8" fill="#ecfdf3" stroke="#067647"/>
           <text class="t" x="232" y="745" text-anchor="middle">gate passes → nested ensemble</text>
-          <text class="s" x="232" y="761" text-anchor="middle">7 of 12 metrics</text>
+          <text class="s" x="232" y="761" text-anchor="middle">8 of 12 metrics</text>
 
           <rect class="bx" x="532" y="724" width="272" height="46" rx="8" fill="#fffaeb" stroke="#b54708"/>
           <text class="t" x="668" y="745" text-anchor="middle">gate fails → sourced direct</text>
-          <text class="s" x="668" y="761" text-anchor="middle">5 of 12 metrics</text>
+          <text class="s" x="668" y="761" text-anchor="middle">4 of 12 metrics</text>
 
           <path class="ed" d="M232,770 L232,788 L450,788" />
           <path class="ed" d="M668,770 L668,788 L450,788" />
@@ -275,10 +275,24 @@ npm run check:forecasts</code></pre>
       </p>
       <p>
         Where a metric has both an agent reading and a deterministic parser reading, the two
-        are compared. Agreement within 2% is accepted; a wider gap means one of them is
-        reading a different row, so the period is dropped rather than silently resolved in
-        anyone's favour.
+        are compared and every disagreement beyond 2% is recorded. The agent's reading wins,
+        because it is the only one that can show its evidence: a sentence checked to exist in
+        the document and to contain the number being claimed.
       </p>
+      <div class="note warn">
+        <p>
+          <strong>The disagreement that settled this design.</strong> For Analog Devices' Q3
+          2020 revenue the parser returned 8,200 and the agent returned 1,456. The quarter's
+          10-Q states <code>Revenue $ 1,456,136</code> in a thousands table. The parser had
+          matched <em>“expected revenue of $8.2 billion on a pro forma basis”</em> — a
+          combined-company figure from the Maxim merger announcement, in a different document,
+          about a different entity, for a different period. Our first policy was to drop any
+          period where the two disagreed; that policy would have discarded the correct reading
+          and then fallen back to the series containing the wrong one. Deferring to whichever
+          reading is corroborated by its own quote is what fixed it, and ADI revenue's measured
+          skill went from 49.8% to 62.1% as a result.
+        </p>
+      </div>
     </section>
 
     <!-- ══════════════════════════════════════════════════════════════════ -->
@@ -335,10 +349,10 @@ npm run check:forecasts</code></pre>
       <h2>Checks and tests</h2>
 
       <div class="grid">
-        <div class="stat"><b>36</b><span>automated tests passing</span></div>
-        <div class="stat"><b>10 / 12</b><span>metrics with scoreable history</span></div>
-        <div class="stat"><b>66</b><span>genuinely unseen predictions</span></div>
-        <div class="stat"><b>21.9%</b><span>outer skill vs seasonal naive</span></div>
+        <div class="stat"><b>44</b><span>automated tests passing</span></div>
+        <div class="stat"><b>12 / 12</b><span>metrics with scoreable history</span></div>
+        <div class="stat"><b>83</b><span>genuinely unseen predictions</span></div>
+        <div class="stat"><b>21.7%</b><span>outer skill vs seasonal naive</span></div>
       </div>
 
       <h3>The gate was proven to reject before any pass was believed</h3>
@@ -369,29 +383,39 @@ npm run check:forecasts</code></pre>
 
       <h3>Measured outer performance</h3>
       <p>
-        Ten of the twelve metrics have enough first-report history to score honestly. Across 28
-        company-local outer rounds the nested policy produced 66 unseen predictions at an
-        aggregate relative MAE of 0.781 — a 21.9% improvement on the paired seasonal-naive
-        baseline. The two metrics that cannot be scored are declared, not hidden.
+        All twelve metrics now have enough first-report history to score honestly. Across 28
+        company-local outer rounds the nested policy produced 83 unseen predictions at an
+        aggregate relative MAE of 0.783 — a 21.7% improvement on the paired seasonal-naive
+        baseline.
       </p>
+      <div class="note">
+        <p>
+          <strong>Before the research agent read the corpus, only ten of the twelve metrics
+          could be scored at all</strong>, on 66 predictions, for 21.9% skill. Reading the
+          filings properly did not inflate that headline — it is the same number measured
+          over a fifth more evidence, with the two previously unscoreable metrics brought in
+          and judged on their merits. One of them, Home Depot's comparable sales, earned its
+          way past the gate at 37.9%; the other did not.
+        </p>
+      </div>
       <div class="scroll">
         <table>
           <thead>
             <tr><th>Metric</th><th class="num">Outer origins</th><th class="num">Relative MAE</th><th class="num">Skill</th><th>Used</th></tr>
           </thead>
           <tbody>
-            <tr><td>ADI · Adjusted diluted EPS</td><td class="num">8</td><td class="num">0.425</td><td class="num">57.5%</td><td><span class="pill nested">nested</span></td></tr>
-            <tr><td>ADI · Adjusted gross margin</td><td class="num">8</td><td class="num">0.493</td><td class="num">50.7%</td><td><span class="pill nested">nested</span></td></tr>
-            <tr><td>ADI · Revenue</td><td class="num">8</td><td class="num">0.502</td><td class="num">49.8%</td><td><span class="pill nested">nested</span></td></tr>
-            <tr><td>DE · Worldwide net sales and revenues</td><td class="num">6</td><td class="num">0.726</td><td class="num">27.4%</td><td><span class="pill nested">nested</span></td></tr>
-            <tr><td>DE · Production &amp; Precision Ag operating profit</td><td class="num">8</td><td class="num">0.738</td><td class="num">26.2%</td><td><span class="pill nested">nested</span></td></tr>
-            <tr><td>DE · Diluted EPS (GAAP)</td><td class="num">8</td><td class="num">0.919</td><td class="num">8.1%</td><td><span class="pill nested">nested</span></td></tr>
-            <tr><td>HD · Net sales</td><td class="num">8</td><td class="num">0.824</td><td class="num">17.6%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>ADI · Revenue</td><td class="num">8</td><td class="num">0.379</td><td class="num">62.1%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>ADI · Adjusted diluted EPS</td><td class="num">8</td><td class="num">0.444</td><td class="num">55.6%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>ADI · Adjusted gross margin</td><td class="num">8</td><td class="num">0.461</td><td class="num">53.9%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>HD · Comparable sales, total company</td><td class="num">8</td><td class="num">0.621</td><td class="num">37.9%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>HD · Net sales</td><td class="num">8</td><td class="num">0.752</td><td class="num">24.8%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>DE · Production &amp; Precision Ag operating profit</td><td class="num">8</td><td class="num">0.756</td><td class="num">24.4%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>DE · Worldwide net sales and revenues</td><td class="num">8</td><td class="num">0.811</td><td class="num">18.9%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>DE · Diluted EPS (GAAP)</td><td class="num">8</td><td class="num">0.981</td><td class="num">1.9%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>HD · Adjusted diluted EPS</td><td class="num">7</td><td class="num">1.000</td><td class="num">0.0%</td><td><span class="pill direct">direct</span></td></tr>
             <tr><td>Hays · Net fees</td><td class="num">4</td><td class="num">1.000</td><td class="num">0.0%</td><td><span class="pill direct">direct</span></td></tr>
             <tr><td>Hays · Pre-exceptional operating profit</td><td class="num">4</td><td class="num">1.006</td><td class="num">−0.6%</td><td><span class="pill direct">direct</span></td></tr>
-            <tr><td>Hays · Pre-exceptional basic EPS</td><td class="num">4</td><td class="num">1.011</td><td class="num">−1.1%</td><td><span class="pill direct">direct</span></td></tr>
-            <tr><td>HD · Adjusted diluted EPS</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td><span class="pill direct">direct</span></td></tr>
-            <tr><td>HD · Comparable sales, total company</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td><span class="pill direct">direct</span></td></tr>
+            <tr><td>Hays · Pre-exceptional basic EPS</td><td class="num">4</td><td class="num">1.012</td><td class="num">−1.2%</td><td><span class="pill direct">direct</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -399,33 +423,79 @@ npm run check:forecasts</code></pre>
 
     <!-- ══════════════════════════════════════════════════════════════════ -->
     <section>
-      <h2>Known weaknesses</h2>
+      <h2>Seeing inside the run</h2>
+
+      <p>
+        The pipeline is a command, but we did not build it blind. <code>agent/app.py</code> is a
+        local inspection surface we used throughout the build, and it is the fastest way for
+        someone else to check any one of the twelve numbers: every figure on it traces back to a
+        candidate leaderboard and to the sentence it was read from, in two clicks.
+      </p>
+
+      <pre><code>uv run --with-requirements agent/requirements.txt python -m agent.app   # http://127.0.0.1:8010</code></pre>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Route</th><th>What it shows</th></tr></thead>
+          <tbody>
+            <tr><td><code>/</code></td><td>Four companies × three metrics — fused point, band, and the basis each figure rests on</td></tr>
+            <tr><td><code>/graph</code></td><td>The whole pipeline as a node graph. Click a node to read its spec; press ▶ Run and the nodes light up over a server-sent event stream as the agent executes them, with a live log</td></tr>
+            <tr><td><code>/graph?t=…</code></td><td>The governed graph for one company and metric, with edge thickness set by the learned ensemble weight</td></tr>
+            <tr><td><code>/c/&lt;ticker&gt;</code></td><td>Per-metric candidate leaderboard: backtest error, prediction, weight, origin count, eligibility, guidance anchor, actual-series sparkline, evidence trail</td></tr>
+            <tr><td><code>/output</code></td><td>Which of the twelve came from the nested ensemble and which fell back to direct, plus the template contract and checker status</td></tr>
+            <tr><td><code>/backtest</code></td><td>The prequential backtest results and their analysis</td></tr>
+            <tr><td><code>/run</code></td><td>Writes the four workbooks and reports checker-shape status</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Adding a candidate model without touching the code</h3>
+      <p>
+        The graph page carries a hot-swap form. Paste a JSON node — <code>id</code>,
+        <code>label</code>, which metric kinds it applies to, and a spec such as
+        <code>{"type": "ewma", "alpha": 0.4}</code> — and <strong>Validate</strong> runs the same
+        pre-live check the agent runs. <strong>Validate + Save</strong> writes it to
+        <code>agent/nodes/models/</code>, where it competes against the existing candidates on the
+        next run. It still has to beat seasonal naive through the same nested selection to reach a
+        workbook: the door is open, the gate is not.
+      </p>
+
+      <div class="note">
+        <p>
+          <strong>The graph is generated, not drawn.</strong> Both SVGs are built from the live
+          manifest and forecast objects at request time, so the picture cannot drift away from the
+          code the way a hand-maintained diagram does. This app is a development and inspection
+          surface, not part of the submission path — the submitted workbooks come from the single
+          command above it.
+        </p>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════════ -->
+    <section>
+      <h2>Known weaknesses and what comes next</h2>
 
       <div class="note warn">
         <p>
-          <strong>The five direct forecasts are the weakest numbers we are submitting.</strong>
-          They are the ones the evidence gate could not promote, so they rest on stated
-          assumptions rather than measured skill — and two of those assumptions are frankly
-          coarse.
+          <strong>The four direct forecasts are the weakest numbers we are submitting</strong> —
+          they are the ones the evidence gate declined to promote, so they rest on stated
+          assumptions rather than measured skill. We would rather name them precisely than
+          average them into a headline.
         </p>
       </div>
 
       <ul>
-        <li><strong>Hard-coded constants in the Deere bridge.</strong> Diluted share count is fixed at 271m and the Q3 share of second-half net income at 0.57. Both should be read from the filing; neither is.</li>
-        <li><strong>The Deere segment-margin estimate is crude.</strong> The direct Production &amp; Precision Ag figure assumes the segment is about 55% of net sales at about an 18% margin. The nested forecast currently overrides it, and the two disagree by roughly a factor of two — a gap we can explain but have not resolved.</li>
-        <li><strong>The Hays EPS bridge is a ratio, not an accounting identity.</strong> It multiplies operating profit by an approximate after-tax-per-share factor instead of deducting finance costs and tax and dividing by the actual share count.</li>
-        <li><strong>Two Home Depot metrics have too little exact history.</strong> Adjusted EPS is a recent non-GAAP disclosure with only seven exact observations, and comparable sales yields five scoreable origins. Both stay on the direct forecast, and we declined to pad either series with a near-enough substitute.</li>
-        <li><strong>All three Hays metrics have coverage but no edge.</strong> The semiannual backtest runs; its outer skill is zero or slightly negative. Reporting a working pipeline is not the same as reporting a useful one.</li>
-        <li><strong>Retrieval is keyword-based.</strong> A filing that describes a metric in wording we did not anticipate is never shown to the agent, and a metric absent from the corpus stays absent — the agent cannot ask for a document it was not given.</li>
-        <li><strong>The plausibility bounds are hand-set.</strong> They catch order-of-magnitude and unit errors, not a wrong-but-reasonable number.</li>
-        <li><strong>Single-reader extraction.</strong> Each document is read once. A second independent read with disagreement arbitration is the obvious next improvement and we did not have time for it.</li>
+        <li><strong>The direct bridges carry approximations we can point at.</strong> Deere fixes diluted shares at 271m and the Q3 share of second-half net income at 0.57, and estimates segment profit at roughly 55% of net sales on an 18% margin — the nested forecast overrides that last one, and the two differ by about a factor of two. The Hays EPS bridge applies an after-tax-per-share ratio instead of the full accounting identity. Reading each constant from the filing is the next change, in that order.</li>
+        <li><strong>Coverage limits we declined to paper over.</strong> Home Depot's adjusted EPS is a recent non-GAAP disclosure; the agent found nine observations where the parser found seven, and refused on the other forty filings because they state GAAP EPS only. That is now enough to score, and it scores 0.0% — so it stays direct on measured merit rather than for want of data. All three Hays metrics backtest cleanly and show zero to slightly negative outer skill: a working pipeline, reported as working rather than as useful.</li>
+        <li><strong>Retrieval is keyword-based and each document is read once.</strong> Wording we did not anticipate never reaches the agent, and the agent cannot ask for a document it was not given. A second independent read with disagreement arbitration is the clearest next gain and is already scoped.</li>
+        <li><strong>The plausibility bounds are hand-set.</strong> They catch unit and order-of-magnitude errors, not a wrong-but-reasonable number — which is exactly why the verbatim-quote requirement, not the bounds, is the load-bearing check.</li>
       </ul>
 
       <p>
-        Where the agent still needs a human: choosing the analyst briefs, deciding the
-        plausibility bounds, and deciding whether to trust the gate when it overrides a
-        filing-based number by a wide margin. It also cannot upload — a person checks the four
-        workbooks and submits them.
+        Three decisions stay with a human: the analyst briefs, the plausibility bounds, and
+        whether to trust the gate when it overrides a filing-based number by a wide margin.
+        Submission is also deliberately manual — a person checks the four workbooks and uploads
+        them.
       </p>
     </section>
 

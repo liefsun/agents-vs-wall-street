@@ -195,6 +195,37 @@ def _norm_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+# Sources state the same figure on different scales: "$41.4 billion", "$ 38,198" in a
+# millions table, "1,456,136" in a thousands table. A reported value is corroborated when
+# some number in the quote matches it under one of these scalings.
+_SCALES = (1.0, 1e-3, 1e3, 1e-6, 1e6, 1e-9, 1e9)
+_CORROBORATION_TOLERANCE = 0.01
+
+_NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
+
+def quote_corroborates(value: float, quote: str) -> bool:
+    """True when the quote actually contains the number the agent reported.
+
+    Checking only that the sentence exists proves the agent did not invent a source; it
+    does not prove the number came from that sentence. This closes that gap.
+    """
+    if value == 0:
+        return "0" in quote
+    for raw in _NUMBER.findall(quote):
+        try:
+            found = float(raw.replace(",", ""))
+        except ValueError:
+            continue
+        for scale in _SCALES:
+            scaled = found * scale
+            if scaled == 0:
+                continue
+            if abs(scaled - value) / max(abs(value), 1e-9) <= _CORROBORATION_TOLERANCE:
+                return True
+    return False
+
+
 def excerpt_for(body: str, brief: MetricBrief) -> str:
     """Windows of text around the metric's own language, in document order.
 
@@ -238,10 +269,22 @@ def excerpt_for(body: str, brief: MetricBrief) -> str:
 
 
 def _ask(doc: Doc, brief: MetricBrief, text: str, llm: LLM) -> dict | None:
+    # A US quarterly release that closes the year carries `FY <year>` in its metadata while
+    # its headline reports the fourth quarter. Without this note the agent dutifully returns
+    # the full-year total, which is a different metric on a different axis.
+    period_note = ""
+    if brief.ticker != "HAS" and doc.period and doc.period.upper().startswith("FY"):
+        period_note = (
+            "\nIMPORTANT: this document's metadata says a fiscal year, but the target is a "
+            "QUARTERLY figure. Report the FOURTH QUARTER value, not the full-year total. If "
+            "the document states only a full-year figure, return null."
+        )
+
     user = (
         f"Company: {brief.ticker}\n"
         f"Document: {doc.name}\n"
-        f"Document's own reporting period (from its metadata): {doc.period or 'unstated'}\n"
+        f"Document's own reporting period (from its metadata): {doc.period or 'unstated'}"
+        f"{period_note}\n"
         f"Published: {doc.published_at}\n\n"
         f"TARGET METRIC: {brief.label}\n"
         f"Report it in: {brief.units}\n"
@@ -311,8 +354,14 @@ def read_document(doc: Doc, brief: MetricBrief, llm: LLM) -> Extraction:
         return reject("quote does not appear verbatim in the source document",
                       value, quote, units_stated=units_stated, confidence=confidence, notes=notes)
 
+    # Range before corroboration: a wildly out-of-scale number is a units or period
+    # mistake, and saying so is more useful than reporting it as a citation failure.
     if not (brief.low <= value <= brief.high):
         return reject(f"value {value} outside plausible range [{brief.low}, {brief.high}]",
+                      value, quote, units_stated=units_stated, confidence=confidence, notes=notes)
+
+    if not quote_corroborates(value, quote):
+        return reject("reported value does not appear in its own supporting quote",
                       value, quote, units_stated=units_stated, confidence=confidence, notes=notes)
 
     if confidence.lower() == "low":
@@ -338,15 +387,26 @@ def candidate_documents(brief: MetricBrief) -> list[Doc]:
 
 
 def research(ticker: str, label: str, llm: LLM | None = None) -> list[Extraction]:
-    """Run the research agent over every candidate document for one metric."""
+    """Run the research agent over every candidate document for one metric.
+
+    This deliberately does not require a live key. Cached answers are committed, so a
+    reviewer with no credentials and no network reproduces exactly the same readings; a
+    document with neither a cached answer nor a usable key simply yields no observation.
+    """
     brief = BRIEFS.get((ticker, label))
     if brief is None:
         return []
     llm = llm or LLM()
-    if not llm.available:
+    if not (llm.available or has_cached_answers()):
         return []
     return [read_document(doc, brief, llm) for doc in candidate_documents(brief)]
 
 
+def has_cached_answers() -> bool:
+    """True when previous readings are on disk, which is what makes a keyless run work."""
+    return os.path.isdir(CACHE) and any(f.endswith(".json") for f in os.listdir(CACHE))
+
+
 def available() -> bool:
-    return LLM().available
+    """The agent can contribute when it can call the model or replay committed answers."""
+    return LLM().available or has_cached_answers()

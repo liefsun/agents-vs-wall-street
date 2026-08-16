@@ -10,4 +10,10 @@ runs/
 entry.json
 submission/*.xlsx
 outputs/
-agent/cache/
+# The research agent's answers are committed on purpose: they are the evidence trail for
+# every extracted figure, they make the final run reproducible offline and without a key,
+# and they let the tests run deterministically. They contain no credentials.
+# Note the `/*` — git will not descend into an excluded directory, so a bare
+# `agent/cache/` here would make the negation below unreachable.
+agent/cache/*
+!agent/cache/research/
