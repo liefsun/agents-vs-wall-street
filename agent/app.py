@@ -53,7 +53,9 @@ border-radius:3px;vertical-align:middle;margin:0 4px 0 12px}
 #panel{background:#161b22;border:1px solid #2a333f;border-radius:12px;max-width:560px;width:92vw;padding:20px;max-height:88vh;overflow:auto}
 #panel h3{margin:0 0 4px} pre{background:#0d1117;border:1px solid #222b36;border-radius:8px;padding:10px;
 overflow:auto;font:12px ui-monospace,monospace;color:#c9d3df}
-.kv{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e252f;font-size:13px}
+.kv{display:flex;justify-content:space-between;gap:14px;padding:4px 0;border-bottom:1px solid #1e252f;font-size:13px}
+.fx{color:#e6e9ef;font-size:14px} .fx code{color:#8fa8c8;font-size:12px}
+details summary::-webkit-details-marker{color:#6aa0ff} details[open] summary{margin-bottom:2px}
 .x{float:right;cursor:pointer;color:#8b93a1}
 .gnode.done rect{stroke:#2f6b43}
 .gnode.run rect{stroke:#3fb950 !important;stroke-width:2.6;filter:drop-shadow(0 0 6px #3fb95088)}
@@ -90,8 +92,15 @@ def _sparkline(axis, values, w=260, h=44):
             f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3" fill="#6ee7a8"/></svg>')
 
 
+_KATEX = ('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">'
+          '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>'
+          '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>'
+          '<script>function renderMath(el){if(window.renderMathInElement)renderMathInElement(el,{delimiters:['
+          '{left:"$$",right:"$$",display:true},{left:"$",right:"$",display:false}],throwOnError:false});}</script>')
+
+
 def _page(title, body):
-    return (f"<!doctype html><meta charset=utf-8><title>{title}</title>"
+    return (f"<!doctype html><meta charset=utf-8><title>{title}</title>{_KATEX}"
             f"<style>{_CSS}</style><div class=wrap>{body}</div>")
 
 
@@ -328,28 +337,44 @@ def _methodology_html():
         return "<ul class=u style='margin:4px 0 8px;padding-left:18px'>" + "".join(
             f"<li>{html.escape(str(x))}</li>" for x in items) + "</ul>"
 
-    h = (f"<div class=u style='margin:0 0 8px'>{html.escape(M['goal'])}</div>"
-         "<b class=u>Approach</b>" + ul(M["approach"]) +
-         "<b class=u>Core principles (the agent must obey)</b>" + ul(M["principles"]) +
-         "<b class=u>Flow</b><div class=u style='margin:4px 0 8px'>" +
-         " → ".join(html.escape(s) for s in M["flow"]) + "</div>" +
-         "<b class=u>Data priority</b>" + ul(M["data"]["priority"]) +
-         "<b class=u>Baseline — current form (backtesting deferred)</b>"
-         f"<div class=u style='margin:4px 0'>{html.escape(M['baseline']['formula'])}</div>"
-         f"<div class=u style='margin:0 0 8px'>allowed: {', '.join(M['baseline']['allowed'])}; "
-         f"forbidden: {html.escape(M['baseline']['forbidden'])}</div>"
-         "<b class=u>Per-company adapters (drive the models)</b>")
+    def pkg(title, inner):
+        return (f"<details open style='margin:6px 0;border:1px solid #263040;border-radius:8px;padding:5px 10px'>"
+                f"<summary style='cursor:pointer;font-weight:600'>{title}</summary>"
+                f"<div style='margin-top:6px'>{inner}</div></details>")
+
+    over = (f"<div class=u style='margin:0 0 6px'>{html.escape(M['goal'])}</div>"
+            "<b class=u>Approach</b>" + ul(M["approach"]) +
+            "<b class=u>Core principles (the agent must obey)</b>" + ul(M["principles"]) +
+            "<b class=u>Flow</b><div class=u style='margin:4px 0'>"
+            + " → ".join(html.escape(s) for s in M["flow"]) + "</div>")
+
+    appr = ""
+    for aid in ("app_guidance", "app_seasonal", "app_bridge"):
+        A = methodology.MODEL_APPROACHES[aid]
+        rows = "".join(_latex_row(lx, note) for lx, note in A["latex"])
+        appr += (f"<div style='margin:6px 0;padding:6px 8px;border:1px solid #2a2013;border-radius:8px'>"
+                 f"<b>{html.escape(A['name'])}</b> <span class=u>· {', '.join(A['metrics'][:2])} …</span>"
+                 f"<div style='margin:4px 0'>{rows}</div></div>")
+
+    cand = "".join(f"<div class=kv style='align-items:center'><span class=fx><code>{mid}</code>&nbsp; ${lx}$</span>"
+                   f"<span class=u>{html.escape(note)}</span></div>"
+                   for mid, lx, note in methodology.MODELS_LATEX)
+    btm = "".join(_latex_row(lx, note) for lx, note in methodology.BACKTEST_LATEX)
+
+    adap = ""
     for t, a in M["adapters"].items():
-        h += f"<div class=kv><span><b>{t}</b> · {html.escape(a['name'])} · {a['period']}</span></div>"
+        adap += f"<div class=kv style='border:0'><span><b>{t}</b> · {html.escape(a['name'])} · {a['period']}</span></div>"
         for lbl, mp in a["metrics"].items():
-            h += (f"<div class=kv><span>{html.escape(lbl)}</span>"
-                  f"<span class=u>{mp['approach']} · {html.escape(mp['note'])}</span></div>")
-        h += f"<div class=u style='margin:2px 0 8px'>guidance: {html.escape(a['guidance'])}</div>"
-    h += ("<b class=u>Output rules</b>" + ul(M["output"]["rules"]) +
-          "<b class=u>Deferred (not in the current form)</b>"
-          f"<div class=u style='margin:4px 0'>{', '.join(M['deferred'])}</div>"
-          f"<div class=u style='margin:8px 0 0'><i>{html.escape(M['current_form'])}</i></div>")
-    return h
+            adap += (f"<div class=kv><span>{html.escape(lbl)}</span>"
+                     f"<span class=u>{mp['approach']}</span></div>")
+
+    return (pkg("📋 Overview · principles · flow", over)
+            + pkg("🧮 Model approaches — formulas (LaTeX)", appr)
+            + pkg("📊 Candidate models — parameter-eval grid", cand)
+            + pkg("📐 Backtest math (prequential + Kupiec)", btm)
+            + pkg("🔧 Per-company adapters — which approach each output uses", adap)
+            + pkg("📤 Output rules", ul(M["output"]["rules"]))
+            + f"<div class=u style='margin:8px 0 0'><i>{html.escape(M['current_form'])}</i></div>")
 
 
 def _graph_svg(fc, mf):
@@ -583,20 +608,26 @@ _APPROACH_META = {
 }
 
 
+def _latex_row(lx, note):
+    return (f"<div class=kv style='align-items:center'><span class=fx>${lx}$</span>"
+            f"<span class=u>{html.escape(note)}</span></div>")
+
+
 def _approach_html(aid):
     A = methodology.MODEL_APPROACHES[aid]
-    formulas = "<pre>" + "\n".join(html.escape(f) for f in A["formulas"]) + "</pre>"
+    formulas = "".join(_latex_row(lx, note) for lx, note in A["latex"])
     metrics = ("<ul class=u style='margin:4px 0;padding-left:18px'>"
                + "".join(f"<li>{html.escape(m)}</li>" for m in A["metrics"]) + "</ul>")
-    return (f"<div class=u style='margin-bottom:6px'>{html.escape(A['desc'])}</div>"
-            f"<b class=u>Formulas</b>{formulas}<b class=u>Metrics it handles</b>{metrics}")
+    return (f"<div class=u style='margin-bottom:8px'>{html.escape(A['desc'])}</div>"
+            f"<b class=u>Formulas</b><div style='margin:4px 0'>{formulas}</div>"
+            f"<b class=u>Metrics it handles</b>{metrics}")
 
 
 def _combined_svg(manifest, spec):
     """One combined network graph (current form): four companies → ingestion →
     Methodology 1 → the model approaches Methodology 1 OWNS → stats control →
     output. The deferred candidate/backtest/ensemble nodes are removed."""
-    W, H = 1060, 700
+    W, H = 1060, 712
     parts = [f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:1060px">']
     nodes = {}
     xs = [120, 360, 600, 840]
@@ -605,14 +636,15 @@ def _combined_svg(manifest, spec):
     def band(lab, y, tag, col):
         parts.append(f'<text x="18" y="{y}" fill="{col}" style="font:600 11px sans-serif">{lab}</text>')
         if tag:
-            parts.append(f'<text x="210" y="{y}" fill="#5c6470" style="font:10px sans-serif">{tag}</text>')
+            parts.append(f'<text x="245" y="{y}" fill="#5c6470" style="font:10px sans-serif">{tag}</text>')
 
-    band("INPUT · four companies", 30, "company code + required output", "#6b7480")
+    band("INPUT · four companies", 30, "highlight only — not a wired stage", "#6b7480")
     band("P1 · DATA INGESTION", 122, "corpus → extract → panel", "#6aa0ff")
-    band("P2 · METHODOLOGY 1", 258, "fixed — decides HOW and owns the model approaches", "#8b93a1")
-    band("P3 · MODEL APPROACHES", 350, "owned by Methodology 1 (backtesting deferred)", "#f0b768")
-    band("P4 · CONTROL · BACKTEST · PARAM-EVAL", 458, "validate + walk-forward backtest + model grid — run alongside", "#8b93a1")
-    band("P5 · OUTPUT LAYER", 530, "4 workbooks · 12 numbers", "#3fb950")
+    band("P2 · METHODOLOGY 1", 258, "fixed — decides HOW and owns the approaches", "#8b93a1")
+    band("P3 · MODEL APPROACHES", 350, "owned by Methodology 1", "#f0b768")
+    band("P3.5 · PARAMETER EVAL", 458, "select best model (grid + rank) — BEFORE backtest", "#8fa8c8")
+    band("P4 · VALIDATE", 520, "backtest (walk-forward) + stats control — AFTER selection", "#8b93a1")
+    band("P5 · OUTPUT LAYER", 582, "4 workbooks · 12 numbers", "#3fb950")
 
     # INPUT — four companies
     incx = []
@@ -636,8 +668,7 @@ def _combined_svg(manifest, spec):
     parts.append(_rect(*ex, "u_extract", "#2a2312", "#7a5a1e",
                        ["Extract → period panel", "per company · actuals + guidance"]))
     excx = ex[0] + ex[2] / 2
-    for cx0 in incx:
-        parts.append(f'<path d="M{cx0},86 C{cx0},112 {excx},112 {excx},{ex[1]}" fill="none" stroke="#2b3745" stroke-width="1"/>')
+    # input companies are highlight-only: no fan-in edges (per Brain — not a wired stage)
     nodes["u_extract"] = {"t": "Extractor → period panel", "plug": "hot", "sub": "P1 · Data ingestion (hot-swap)",
                           "body": "Text→panel per company: historical actuals series + issued guidance, event-deduped."}
 
@@ -651,30 +682,7 @@ def _combined_svg(manifest, spec):
                             "sub": "P2 · FIXED / constitutional — the agent reads this and obeys it",
                             "body": _methodology_html()}
 
-    # LLM driver (optional, OpenAI) — qualitative signals from calls/slides (§6)
-    from .llm import LLM
-    _llm = LLM()
-    ldc = "#6aa0ff" if _llm.available else "#5c6470"
-    parts.append(_rect(700, 190, 214, 42, "llm_driver",
-                       (ldc + "1e") if _llm.available else "#171c24", ldc,
-                       ["LLM driver · signals (§6)",
-                        ("OpenAI: " + _llm.model) if _llm.available else "set OPENAI_API_KEY in .env"],
-                       dash=not _llm.available))
-    parts.append('<path d="M810,160 C810,176 805,176 805,190" fill="none" stroke="#2b3745" stroke-width="0.8"/>')
-    parts.append('<path d="M700,222 C640,248 690,262 680,278" fill="none" stroke="#3a4658" '
-                 'stroke-width="0.8" stroke-dasharray="3 3"/>')
-    nodes["llm_driver"] = {
-        "t": "LLM driver — qualitative signals (§6)",
-        "plug": "code" if _llm.available else "no",
-        "sub": "OpenAI · reads calls/slides · never sets the numbers",
-        "body": (f"<b>OpenAI driver active</b> (model {_llm.model}, disk-cached). Reads the latest call/slides "
-                 "and codes demand / pricing / inventory / management-confidence / guidance-direction on a "
-                 "−2..+2 scale with reasons. Informational only — feeds the deferred regime/scenario layer; "
-                 "it never sets a forecast number (Methodology 1 §6)."
-                 if _llm.available else
-                 "<b>No OpenAI key.</b> Set <code>OPENAI_API_KEY</code> in the <code>.env</code> file to enable. "
-                 "The numeric pipeline runs fine without it — the LLM only reads / extracts / explains, it never "
-                 "sets the forecast numbers (Methodology 1).")}
+    # (LLM driver is OFF-PIPELINE — shown outside the graph, not a stage in the flow)
 
     # P3 model approaches — OWNED by Methodology 1 (dashed container = belonging)
     parts.append('<rect x="150" y="356" width="760" height="88" rx="11" fill="#1d160c" '
@@ -690,16 +698,30 @@ def _combined_svg(manifest, spec):
         nodes[aid] = {"t": f"{t} — model approach", "plug": "hot",
                       "sub": "P3 · owned by Methodology 1 · formulas ↓", "body": _approach_html(aid)}
 
-    # P4 · stats control + prequential backtest (run alongside the output)
-    parts.append('<line x1="530" y1="444" x2="530" y2="458" stroke="#3a4658" stroke-width="1.4"/>')
-    for cxn in (234, 530, 826):
-        parts.append(f'<path d="M530,458 C530,464 {cxn},462 {cxn},470" fill="none" stroke="#3a4658" stroke-width="1"/>')
-    parts.append(_rect(100, 470, 268, 38, "stats_control", "#1b222c", "#3a4658",
+    # P3.5 · parameter eval — SELECT the best model (converge from approaches; BEFORE backtest)
+    for cxn in (300, 530, 760):
+        parts.append(f'<path d="M{cxn},444 C{cxn},454 530,454 530,466" fill="none" stroke="#2f4a5e" stroke-width="0.9"/>')
+    parts.append(_rect(360, 466, 340, 36, "param_eval", "#1a2530", "#3f6a8c",
+                       ["Parameter eval · select best model", "grid + rank + robustness"]))
+    nodes["param_eval"] = {"t": "Parameter eval — select best model", "plug": "no",
+                           "sub": "P3.5 · model SELECTION (before backtest) — pulled from quant-projects",
+                           "body": ("Uses the prequential backtest as its ENGINE: for each metric it evaluates a GRID "
+                                    "of candidate models (seasonal-naive · naive · drift · trend · AR · ETS · guidance), "
+                                    "ranks them by out-of-sample error and picks the best (compare_models analog), plus "
+                                    "a window sensitivity grid for robustness. Because it SELECTS the model, it sits "
+                                    "BEFORE the final backtest.<br><br>"
+                                    "<span class=u>Findings: ADI EPS → guidance wins (validates the methodology); "
+                                    "ADI gross margin → AR beats the drift currently used.</span><br><br>"
+                                    "<a href='/backtest'>▸ per-metric model ranking</a>")}
+
+    # P4 · validate — backtest + stats control (AFTER the selection)
+    parts.append('<line x1="530" y1="502" x2="530" y2="516" stroke="#3a4658" stroke-width="1.2"/>')
+    parts.append('<path d="M530,516 C530,522 380,520 380,528" fill="none" stroke="#3a4658" stroke-width="1"/>')
+    parts.append('<path d="M530,516 C530,522 680,520 680,528" fill="none" stroke="#3a4658" stroke-width="1"/>')
+    parts.append(_rect(250, 528, 260, 36, "prequential", "#1b222c", "#3a4658",
+                       ["Prequential backtest · validate", "walk-forward · coverage · Kupiec"]))
+    parts.append(_rect(550, 528, 260, 36, "stats_control", "#1b222c", "#3a4658",
                        ["Stats control · validate", "finite · range · sign · band"]))
-    parts.append(_rect(396, 470, 268, 38, "prequential", "#1b222c", "#3a4658",
-                       ["Prequential backtest", "walk-forward · coverage · Kupiec"]))
-    parts.append(_rect(692, 470, 268, 38, "param_eval", "#1b222c", "#3a4658",
-                       ["Parameter eval", "model grid · rank · robustness"]))
     from . import stats_control as _sc
     summ_sc = {"pass": 0, "warn": 0, "fail": 0, "n": 0}
     for c in cos:                                     # per company so duplicate labels (EPS) aren't merged
@@ -708,55 +730,39 @@ def _combined_svg(manifest, spec):
             summ_sc[k] += r[k]
     checkdoc = "".join(f"<div class=kv><span>{html.escape(x)}</span></div>" for x in _sc.CHECKS_DOC)
     nodes["stats_control"] = {"t": "Stats control — validate", "plug": "no",
-                              "sub": "P4 · runs after the model approaches, before output",
+                              "sub": "P4 · validates the output numbers",
                               "body": (f"Deterministic control gate on every produced number "
                                        f"(Methodology 1 §11 units + consistency; §13 never hide failures).<br>"
                                        f"<div class=kv><span>latest run</span><span>"
                                        f"{summ_sc['pass']} pass · {summ_sc['warn']} warn · {summ_sc['fail']} fail "
                                        f"/ {summ_sc['n']}</span></div><br><b class=u>Checks</b>{checkdoc}")}
-    nodes["prequential"] = {"t": "Prequential backtest", "plug": "no",
-                            "sub": "P4 · walk-forward, runs alongside the output",
-                            "body": ("Predictive-sequential backtest (pulled from quant-projects garch_var, "
-                                     "walk-forward VaR method). At each historical origin, fit on data-up-to-then, "
-                                     "forecast next, score the realized actual.<br><br>"
-                                     "<b class=u>Emits</b><div class=kv><span>point error</span>"
-                                     "<span class=u>prequential MAE / RMSE / WAPE</span></div>"
-                                     "<div class=kv><span>band coverage</span>"
-                                     "<span class=u>VaR-style breach rate vs expected</span></div>"
-                                     "<div class=kv><span>Kupiec POF</span>"
-                                     "<span class=u>LR test that breach rate is calibrated (χ²₁)</span></div><br>"
-                                     "<span class=u>Runs where a historical series exists (ADI full panel, HD releases).</span>"
-                                     "<br><br><a href='/backtest'>▸ open full backtest results &amp; analysis</a>")}
-    nodes["param_eval"] = {"t": "Parameter eval — model grid", "plug": "no",
-                           "sub": "P4 · pulled from quant-projects (compare_models + sensitivity)",
-                           "body": ("For each metric, evaluate a GRID of candidate models "
-                                    "(seasonal-naive · naive · drift · trend · AR · ETS · guidance) by prequential "
-                                    "out-of-sample error, rank them, pick the best and check it beats the "
-                                    "Seasonal-Naive baseline — the <b>compare_models</b> analog. Then a "
-                                    "<b>sensitivity</b> grid over the backtest window flags whether the winner is "
-                                    "robust or fragile.<br><br>"
-                                    "<span class=u>Findings drive model choice: e.g. ADI EPS → guidance wins "
-                                    "(validates the methodology); ADI gross margin → AR beats the drift the pipeline "
-                                    "currently uses.</span><br><br>"
-                                    "<a href='/backtest'>▸ see the per-metric model ranking</a>")}
+    nodes["prequential"] = {"t": "Prequential backtest — validate", "plug": "no",
+                            "sub": "P4 · validates the selected model (walk-forward)",
+                            "body": ("Predictive-sequential backtest (pulled from quant-projects garch_var). At each "
+                                     "historical origin, fit on data-up-to-then, forecast next, score the realized "
+                                     "actual.<br><br><b class=u>Emits</b>"
+                                     "<div class=kv><span>point error</span><span class=u>MAE / RMSE / WAPE</span></div>"
+                                     "<div class=kv><span>band coverage</span><span class=u>VaR-style breach vs expected</span></div>"
+                                     "<div class=kv><span>Kupiec POF</span><span class=u>χ²₁ calibration test</span></div><br>"
+                                     "<a href='/backtest'>▸ full backtest results &amp; analysis</a>")}
 
     # P5 output — four workbooks + OUTPUT spec
     for c, x in zip(cos, xs):
         ready = c["wired"] and all(m["point"] is not None for m in c["metrics"])
         col = "#3fb950" if ready else "#8b93a1"
         summ = "  ".join(_fmt(m["point"], m["kind"]) for m in c["metrics"] if m["point"] is not None) or "pending"
-        parts.append(_rect(x, 542, 170, 46, f"out_{c['ticker']}", "#16241b", col, [c["file"], summ],
+        parts.append(_rect(x, 592, 170, 44, f"out_{c['ticker']}", "#16241b", col, [c["file"], summ],
                            ring=("#3fb950" if ready else None)))
-        parts.append(f'<path d="M530,508 C530,526 {x+85},526 {x+85},542" fill="none" stroke="#3a6b47" stroke-width="1.2"/>')
+        parts.append(f'<path d="M530,564 C530,582 {x+85},582 {x+85},592" fill="none" stroke="#3a6b47" stroke-width="1.1"/>')
         mrows = "".join(f"<div class=kv><span>{html.escape(m['label'])} <span class=u>{m['units']}</span></span>"
                         f"<span>{(_fmt(m['point'], m['kind']) if m['point'] is not None else '—')}</span></div>"
                         for m in c["metrics"])
         nodes[f"out_{c['ticker']}"] = {"t": c["file"], "plug": "no", "sub": "P5 · output workbook",
                                        "body": f"Summary sheet for {c['company']} · {c['period']}.<br>{mrows}"}
-    parts.append(_rect(378, 618, 304, 38, "output_spec", "#12271a", "#2f6b43",
+    parts.append(_rect(378, 660, 304, 36, "output_spec", "#12271a", "#2f6b43",
                        [f"OUTPUT · {spec['n_numbers']} numbers → {len(spec['files'])} .xlsx", "click: what we emit"]))
     for x in xs:
-        parts.append(f'<line x1="{x+85}" y1="588" x2="530" y2="618" stroke="#284d33" stroke-width="0.7"/>')
+        parts.append(f'<line x1="{x+85}" y1="636" x2="530" y2="660" stroke="#284d33" stroke-width="0.7"/>')
     filerows = "".join(f"<div class=kv><span>{f['file']}</span><span class=u>{', '.join(m['label'] for m in f['metrics'])}</span></div>"
                        for f in spec["files"])
     contract = "".join(f"<div class=kv><span>{html.escape(x)}</span></div>" for x in spec["contract"])
@@ -776,7 +782,7 @@ def _modal_js(nodes):
             "if(n.body)h+='<div style=\"margin:10px 0\">'+n.body+'</div>';"
             "if(n.producer)h+='<div class=kv><span>code producer</span><span>'+n.producer+'</span></div>';"
             "if(n.spec)h+='<pre>'+JSON.stringify(n.spec,null,2)+'</pre>';"
-            "document.getElementById('panel').innerHTML=h;document.getElementById('ov').style.display='flex';}"
+            "var P=document.getElementById('panel');P.innerHTML=h;renderMath(P);document.getElementById('ov').style.display='flex';}"
             "function hide(){document.getElementById('ov').style.display='none';}</script>")
 
 
@@ -808,11 +814,20 @@ def graph():
                   "if(d.done){es.close();b.disabled=false;b.textContent='▶ Run again';b.classList.add('g');"
                   "var el=document.getElementById('n_'+d.node);if(el)el.classList.add('run');}};"
                   "es.onerror=function(){es.close();b.disabled=false;b.textContent='▶ Run pipeline';};}</script>")
+        from .llm import LLM as _LLM
+        _l = _LLM()
+        llm_card = ("<div class=card style='border-color:#263040;background:#12161c'>"
+                    "<b class=u>LLM driver</b> <span class=badge>off-pipeline</span> "
+                    + (f"<span class='badge guide'>OpenAI {_l.model}</span> reads calls/slides for qualitative "
+                       "signals (§6) — never sets the numbers; not a stage in the flow."
+                       if _l.available else
+                       "<span class=badge>no key</span> set OPENAI_API_KEY in .env to enable. Not part of the pipeline.")
+                    + "</div>")
         body = (f"<h1>One pipeline · four companies · one output layer</h1>"
-                f"<div class=sub>All four companies flow through the same governed pipeline; the "
-                f"<b>output layer</b> emits the {spec['n_numbers']} numbers as {len(spec['files'])} workbooks. "
+                f"<div class=sub>Input (highlight only) → ingestion → Methodology 1 → model approaches → "
+                f"<b>parameter eval (select best)</b> → <b>validate (backtest + stats control)</b> → output. "
                 f"Click a node to inspect it; click ▶ Run to watch the agent execute them.</div>"
-                f"{run_card}"
+                f"{run_card}{llm_card}"
                 f"{legend}<div class=card style='padding:10px'>{svg}</div>"
                 f"<div class=card><b>{manifest['n_filled']}/{manifest['n_total']} numbers produced</b> "
                 f"· {manifest['wired']}/4 companies wired · <a href='/output'>output detail</a>"
@@ -862,7 +877,7 @@ def graph():
           "if(n.body)h+='<div style=\"margin:10px 0\">'+n.body+'</div>';"
           "if(n.producer)h+='<div class=kv><span>code producer</span><span>'+n.producer+'</span></div>';"
           "if(n.spec)h+='<pre>'+JSON.stringify(n.spec,null,2)+'</pre>';"
-          "document.getElementById('panel').innerHTML=h;document.getElementById('ov').style.display='flex';}"
+          "var P=document.getElementById('panel');P.innerHTML=h;renderMath(P);document.getElementById('ov').style.display='flex';}"
           "function hide(){document.getElementById('ov').style.display='none';}"
           "function val(){fetch('/api/validate',{method:'POST',headers:{'Content-Type':'application/json'},"
           "body:document.getElementById('nodejson').value}).then(r=>r.json()).then(j=>{"
@@ -903,18 +918,16 @@ def api_run():
             time.sleep(0.3)
             yield sse({"node": "u_extract", "log": f"   P1 · ingest → extract period panel  ({t})"})
             time.sleep(0.3)
-            # optional LLM driver — qualitative signals (reads calls/slides; never sets numbers)
+            # LLM driver (OFF-PIPELINE) — qualitative signals; never sets numbers, no graph node
             from .llm import LLM as _LLM
             _llm = _LLM()
             if _llm.available:
                 from . import signals as _signals
                 s = _signals.qualitative_signals(t, _llm)
-                msg = s["summary"] if s else "(no signal)"
-                yield sse({"node": "llm_driver", "cls": "n", "log": f"   LLM driver · calls/slides → {msg}"})
+                yield sse({"cls": "n", "log": f"   [off-pipeline] LLM driver · calls/slides → {s['summary'] if s else '(no signal)'}"})
             else:
-                yield sse({"node": "llm_driver", "cls": "d",
-                           "log": "   LLM driver · no key (set OPENAI_API_KEY in .env) — numeric pipeline unaffected"})
-            time.sleep(0.25)
+                yield sse({"cls": "d", "log": "   [off-pipeline] LLM driver · no key — numeric pipeline unaffected"})
+            time.sleep(0.2)
             d = direct.forecast(t)
             metrics = []
             for m in sp["metrics"]:
@@ -927,23 +940,24 @@ def api_run():
                 aname = _APPROACH_META.get(anode, ("", ""))[0]
                 val = mm["point"] if mm else "—"
                 basis = (mm["basis"][:50] if mm else "")
-                yield sse({"node": anode, "cls": "d",
-                           "log": f"   P3 · {aname} → {lbl} = {val}  [{basis}]"})
+                yield sse({"node": anode, "cls": "d", "log": f"   P3 · {aname} → {lbl} = {val}  [{basis}]"})
                 if mm and mm["point"] is not None:
                     done += 1
                 time.sleep(0.22)
-            # P4 · stats control validation (after approaches, before output)
-            from . import stats_control as _sc
-            res = _sc.validate(metrics)
-            sm = _sc.summarize(res)
-            yield sse({"node": "stats_control", "cls": "n",
-                       "log": f"   P4 · stats control → {sm['pass']} pass · {sm['warn']} warn · {sm['fail']} fail"})
-            for lbl, r in res.items():
-                if r["verdict"] != "pass":
-                    bad = ", ".join(c["name"] for c in r["checks"] if not c["ok"])
-                    yield sse({"cls": "d", "log": f"        {'✗' if r['verdict']=='fail' else '⚠'} {lbl}: {r['verdict']} ({bad})"})
-            time.sleep(0.25)
-            # P4 · prequential backtest (walk-forward, runs alongside the output)
+            # P3.5 · parameter eval — SELECT best model (BEFORE backtest)
+            from . import param_eval as _pe
+            for mm in metrics:
+                c = _pe.compare(t, mm["label"], mm["kind"] or "money")
+                if c.get("insufficient"):
+                    continue
+                sens = c.get("sensitivity") or {}
+                tag = ("beats baseline" if c["beats_baseline"] else "≤ baseline") + \
+                      (", robust" if sens.get("robust") else ", window-sensitive")
+                yield sse({"node": "param_eval", "cls": "d",
+                           "log": f"   P3.5 · param-eval {mm['label']}: best={c['best']} ({tag})"})
+                time.sleep(0.14)
+            time.sleep(0.12)
+            # P4 · prequential backtest — validate the selected model (walk-forward)
             from . import prequential as _pq
             ran = 0
             for mm in metrics:
@@ -962,19 +976,17 @@ def api_run():
                 yield sse({"node": "prequential", "cls": "d",
                            "log": f"   P4 · backtest ({t}) skipped — no historical series yet"})
             time.sleep(0.2)
-            # P4 · parameter eval (model grid: compare candidates, pick best, robustness)
-            from . import param_eval as _pe
-            for mm in metrics:
-                c = _pe.compare(t, mm["label"], mm["kind"] or "money")
-                if c.get("insufficient"):
-                    continue
-                sens = c.get("sensitivity") or {}
-                tag = ("beats baseline" if c["beats_baseline"] else "≤ baseline") + \
-                      (", robust" if sens.get("robust") else ", window-sensitive")
-                yield sse({"node": "param_eval", "cls": "d",
-                           "log": f"   P4 · param-eval {mm['label']}: best={c['best']} ({tag})"})
-                time.sleep(0.14)
-            time.sleep(0.15)
+            # P4 · stats control — validate the output numbers
+            from . import stats_control as _sc
+            res = _sc.validate(metrics)
+            sm = _sc.summarize(res)
+            yield sse({"node": "stats_control", "cls": "n",
+                       "log": f"   P4 · stats control → {sm['pass']} pass · {sm['warn']} warn · {sm['fail']} fail"})
+            for lbl, r in res.items():
+                if r["verdict"] != "pass":
+                    bad = ", ".join(c["name"] for c in r["checks"] if not c["ok"])
+                    yield sse({"cls": "d", "log": f"        {'✗' if r['verdict']=='fail' else '⚠'} {lbl}: {r['verdict']} ({bad})"})
+            time.sleep(0.2)
             path = workbook.write_direct(sp["outputFile"], sp["period"], metrics)
             yield sse({"node": f"out_{t}", "cls": "n", "log": f"   P5 · output → wrote {os.path.basename(path)}"})
             time.sleep(0.3)

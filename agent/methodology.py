@@ -182,10 +182,10 @@ MODEL_APPROACHES = {
         "name": "Guidance anchor",
         "desc": ("Anchor to management's own published numbers — the strongest signal (Methodology 1 §5 "
                  "guidance calibration). Used where the company gives an explicit numeric guide."),
-        "formulas": [
-            "midpoint:    f = (guide_low + guide_high) / 2",
-            "reversion:   f = φ·y_last + (1−φ)·guide_mid,   φ = 0.4",
-            "stated:      f = top-of-range, blended with company-compiled consensus",
+        "latex": [
+            (r"f = \tfrac{1}{2}\,(g_{\text{lo}} + g_{\text{hi}})", "guidance midpoint"),
+            (r"f = \varphi\,y_{t-1} + (1-\varphi)\,g_{\text{mid}},\quad \varphi = 0.4", "reversion to guide"),
+            (r"f = \text{top-of-range}\ \oplus\ \text{consensus}", "stated range"),
         ],
         "metrics": ["ADI Revenue", "ADI Adjusted diluted EPS", "HD Comparable sales", "HAS Pre-exc operating profit"],
     },
@@ -193,10 +193,10 @@ MODEL_APPROACHES = {
         "name": "Seasonal + trend",
         "desc": ("Same-quarter seasonal anchor plus a recent-trend / growth adjustment on the extracted "
                  "actual series (Methodology 1 §5). Low-dimensional only — no high-parameter models."),
-        "formulas": [
-            "seasonal × growth:   f = y[t−4] · (1 + g),   g = sales-growth guide or median YoY",
-            "recent trend:        f = y[t−4] · (1 + YoY_latest)",
-            "net fees:            f = FY_prev · (1 + YoY_reported)",
+        "latex": [
+            (r"f = y_{t-4}\,(1 + g),\quad g = \text{guide or } \operatorname{median}_i \tfrac{y_i}{y_{i-4}}", "seasonal × growth"),
+            (r"f = y_{t-4}\,(1 + \mathrm{YoY}_{\text{latest}})", "recent trend"),
+            (r"f = \mathrm{FY}_{\text{prev}}\,(1 + \mathrm{YoY}_{\text{reported}})", "net fees"),
         ],
         "metrics": ["HD Net sales", "HD Adjusted diluted EPS", "ADI Adjusted gross margin", "HAS Net fees", "DE Worldwide net sales"],
     },
@@ -204,16 +204,32 @@ MODEL_APPROACHES = {
         "name": "Accounting bridge",
         "desc": ("Derive the target via accounting identities rather than a blind time series "
                  "(Methodology 1 §4 / §9). Keeps money, margins, EPS and shares consistent."),
-        "formulas": [
-            "EPS:        EPS = NetIncome_after_tax / diluted_shares",
-            "DE EPS:     NI_Q3 = (NI_FY_guide − NI_H1) · s_Q3;   EPS = NI_Q3 / shares",
-            "op profit:  OP = revenue · operating_margin",
-            "Hays OP:    OP = net_fees · conversion_rate",
-            "segment:    OP_PPA = sales_PPA · margin_PPA",
+        "latex": [
+            (r"\mathrm{EPS} = \dfrac{\mathrm{NI}_{\text{after-tax}}}{\text{shares}_{\text{dil}}}", "EPS identity"),
+            (r"\mathrm{NI}_{Q3} = (\mathrm{NI}_{FY} - \mathrm{NI}_{H1})\,s_{Q3},\quad \mathrm{EPS}=\dfrac{\mathrm{NI}_{Q3}}{\text{shares}}", "DE quarterly EPS"),
+            (r"\mathrm{OP} = \text{revenue}\times m_{\text{op}}", "operating profit"),
+            (r"\mathrm{OP} = \text{net-fees}\times c\quad(c=\text{conversion rate})", "Hays OP"),
+            (r"\mathrm{OP}_{\mathrm{PPA}} = \text{sales}_{\mathrm{PPA}}\times m_{\mathrm{PPA}}", "segment OP"),
         ],
         "metrics": ["DE Diluted EPS (GAAP)", "DE PPA operating profit", "HAS Pre-exc basic EPS"],
     },
 }
+
+# candidate models (param-eval grid) + backtest math, in LaTeX — shown in the package view
+MODELS_LATEX = [
+    ("seasonal_naive", r"\hat y_t = y_{t-4}", "baseline — same quarter last year"),
+    ("naive_last", r"\hat y_t = y_{t-1}", "last quarter"),
+    ("drift_mult", r"\hat y_t = y_{t-4}\cdot \operatorname{median}_i \tfrac{y_i}{y_{i-4}}", "seasonal × median YoY growth"),
+    ("drift_add", r"\hat y_t = y_{t-4} + \operatorname{median}_i (y_i - y_{i-4})", "seasonal + median YoY change"),
+    ("trend_mult", r"\hat y_t = y_{t-4}\,(1 + b_0 + b_1 t)", "seasonal + linear growth trend"),
+    ("ar_lag", r"\hat y_t = \beta_0 + \beta_1 y_{t-1} + \beta_2 y_{t-4}", "lagged OLS / AR"),
+    ("ets_hw", r"\hat y_t = \ell_t + b_t + s_{t-m}", "Holt-Winters (level+trend+season)"),
+]
+BACKTEST_LATEX = [
+    (r"\mathrm{WAPE} = \dfrac{\sum_t |a_t - \hat y_t|}{\sum_t |a_t|}", "point error (money/EPS); pct uses MAE in points"),
+    (r"\text{breach}_t = \mathbb{1}\!\left[\,|a_t - \hat y_t| > z\,\sigma_{<t}\,\right],\quad z_{80\%}=1.28", "VaR-style band coverage (PIT σ)"),
+    (r"LR = -2\ln\dfrac{(1-p_0)^{n-x}\,p_0^{x}}{(1-\hat p)^{n-x}\,\hat p^{x}},\quad \hat p=\tfrac{x}{n}\sim\chi^2_1", "Kupiec POF calibration test"),
+]
 
 
 def adapter(ticker: str) -> dict:
