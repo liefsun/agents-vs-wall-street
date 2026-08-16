@@ -69,15 +69,23 @@ def run_pipeline(write: bool = False, selection_mode: str = selection.GUARDED_NE
                             "sources": mm["sources"] if mm else [],
                             "selection": mm.get("selection") if mm else None,
                             "direct_point": mm.get("direct_point") if mm else None})
+        # deterministic reconciliation guard — blend toward issued guidance where the model
+        # wanders off it (accuracy), flag anchorless large disagreements (safety). Runs before
+        # the workbook is written so the guarded numbers are what ship.
+        from . import reconcile
+        recon = reconcile.apply(t, metrics)
         path = workbook.write_direct(spec["outputFile"], spec["period"], metrics) if write else None
         proc = _stamp()
         n_nested = sum(1 for m in metrics if (m.get("selection") or {}).get("source") == "nested")
         got = sum(1 for m in metrics if m["point"] is not None)
+        n_guard = sum(1 for r in recon if r["action"] == "guidance-guard")
         stages.append((proc, f"{t}: {got}/{len(metrics)} numbers ({n_nested} nested, "
-                             f"{got - n_nested} direct)" + (f" → wrote {os.path.basename(path)}" if path else "")))
+                             f"{got - n_nested} direct" + (f", {n_guard} guidance-guarded" if n_guard else "") + ")"
+                             + (f" → wrote {os.path.basename(path)}" if path else "")))
         companies.append({"ticker": t, "company": spec["company"], "period": spec["period"],
                           "file": spec["outputFile"], "wired": bool(d["metrics"]),
-                          "written": path, "processed_at": proc, "metrics": metrics})
+                          "written": path, "processed_at": proc, "metrics": metrics,
+                          "reconciliation": recon})
     filled = sum(1 for f in companies for m in f["metrics"] if m["point"] is not None)
     total = sum(len(f["metrics"]) for f in companies)
     report_paths = selection.write_nested_report() if write and selection_mode != selection.DIRECT_MODE else None
