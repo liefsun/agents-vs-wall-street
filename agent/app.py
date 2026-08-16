@@ -354,6 +354,29 @@ def _rect(x, y, w, h, nid, fill, stroke, lines, dash=False, ring=None):
     return f'<g class=gnode id="n_{nid}" onclick="show(\'{nid}\')">{rr}{r}{txt}</g>'
 
 
+def _candidate_configs():
+    """The BacktestConfig grid, flattened to one list of config dicts.
+
+    A shared grid is reported as a list, but the company-local protocols (quarterly
+    season 4 against Hays H1/FY season 2) report
+    {"company_local": True, "by_company": {ticker: [config, ...]}} instead. Identical
+    grids are merged and tagged with the tickers that use them.
+    """
+    reported = selection.nested_bundle()["report"]["candidate_configs"]
+    if not isinstance(reported, dict):
+        return list(reported)
+
+    merged = {}
+    for ticker, configs in (reported.get("by_company") or {}).items():
+        for config in configs:
+            key = (config["config_id"], config["origin_window"], config["min_train"],
+                   config["min_origins"], config["weight_cap"],
+                   config["baseline_weight_floor"], config["min_improvement"])
+            merged.setdefault(key, (config, []))[1].append(ticker)
+    return [{**config, "_used_by": ", ".join(tickers)}
+            for config, tickers in merged.values()]
+
+
 def _methodology_html():
     """Full description of the active methodology (Methodology 1) for the node modal."""
     M = methodology.METHODOLOGY_1
@@ -389,15 +412,16 @@ def _methodology_html():
     cand = "".join(f"<div class=kv style='align-items:center'><span class=fx><code>{mid}</code>&nbsp; ${lx}$</span>"
                    f"<span class=u>{html.escape(note)}</span></div>"
                    for mid, lx, note in methodology.MODELS_LATEX)
-    configs = selection.nested_bundle()["report"]["candidate_configs"]
     config_grid = "".join(
         _latex_row(
             rf"\theta=({config['origin_window']},{config['min_train']},{config['min_origins']},"
             rf"{config['weight_cap']:.2f},{config['baseline_weight_floor']:.2f},"
             rf"{config['min_improvement']:.2f})",
-            f"{config['config_id']}: window, min train/origins, weight cap, baseline floor, min improvement",
+            f"{config['config_id']}"
+            + (f" · {config['_used_by']}" if config.get("_used_by") else "")
+            + ": window, min train/origins, weight cap, baseline floor, min improvement",
         )
-        for config in configs
+        for config in _candidate_configs()
     )
     btm = "".join(_latex_row(lx, note) for lx, note in methodology.BACKTEST_LATEX)
 
@@ -880,14 +904,32 @@ def graph():
                   "if(d.done){es.close();b.disabled=false;b.textContent='▶ Run again';b.classList.add('g');"
                   "var el=document.getElementById('n_'+d.node);if(el)el.classList.add('run');}};"
                   "es.onerror=function(){es.close();b.disabled=false;b.textContent='▶ Run pipeline';};}</script>")
+        from . import research as _research
         from .llm import LLM as _LLM
         _l = _LLM()
+        # Two distinct jobs for the same driver, and conflating them misreads the design:
+        # research.py is the primary reader inside the pipeline, signals.py is not.
+        if _l.available:
+            _reader = (f"<span class='badge guide'>OpenAI {_l.model}</span> live")
+        elif _research.has_cached_answers():
+            _reader = "<span class='badge guide'>replaying committed answers</span> no key needed"
+        else:
+            _reader = ("<span class=badge>no key, no cache</span> set OPENAI_API_KEY in .env — "
+                       "the deterministic parsers take over")
         llm_card = ("<div class=card style='border-color:#263040;background:#12161c'>"
-                    "<b class=u>LLM driver</b> <span class=badge>off-pipeline</span> "
-                    + (f"<span class='badge guide'>OpenAI {_l.model}</span> reads calls/slides for qualitative "
-                       "signals (§6) — never sets the numbers; not a stage in the flow."
-                       if _l.available else
-                       "<span class=badge>no key</span> set OPENAI_API_KEY in .env to enable. Not part of the pipeline.")
+                    "<b class=u>LLM driver</b> <span class=u>— one driver, two jobs</span>"
+                    "<div class=mrow><span><b>research agent</b> "
+                    "<span class='badge guide'>in-pipeline · P1</span> reads the filings to a "
+                    "per-metric brief; every figure must carry a quote that appears verbatim in "
+                    "the source or it is discarded. This is where the history comes from.</span>"
+                    f"<span>{_reader}</span></div>"
+                    "<div class=mrow><span><b>qualitative signals</b> "
+                    "<span class=badge>off-pipeline</span> reads calls and slides for colour "
+                    "(§6) — never sets a number, not a stage in the flow.</span>"
+                    "<span class=u>informational</span></div>"
+                    "<div class=u style='margin-top:6px'>The LLM extracts reported facts only. "
+                    "Forecasting is the deterministic statistical layer, gated on unseen "
+                    "outer origins.</div>"
                     + "</div>")
         body = (f"<h1>One pipeline · four companies · one output layer</h1>"
                 f"<div class=sub>Input (highlight only) → ingestion → Methodology 1 → model approaches → "

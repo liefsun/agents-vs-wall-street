@@ -169,7 +169,7 @@ METHODOLOGY_1 = {
         "never store API keys in the repo, logs, entry.json or HTML",
         "all competition-specific code/prompts/workflows created after the event starts",
     ],
-    "deferred": ["historical coverage for the remaining six metrics", "hazard/regime", "Sequential Monte Carlo",
+    "deferred": ["external first-report history for the remaining two HD metrics", "hazard/regime", "Sequential Monte Carlo",
                  "external-data nowcast"],
     "current_form": ("Guarded nested output: use the nested causal ensemble only when unseen outer "
                      "evidence and deployment skill are positive; otherwise retain the adapter's direct "

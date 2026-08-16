@@ -3,72 +3,533 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent architecture — team name</title>
+  <title>Aquara Navigator — agent architecture</title>
   <style>
-    :root { color-scheme: light; --ink:#101828; --muted:#667085; --line:#d0d5dd; --blue:#155eef; --paper:#fff; --wash:#f8fafc; }
+    :root {
+      color-scheme: light;
+      --ink:#101828; --muted:#667085; --faint:#98a2b3; --line:#d0d5dd; --hair:#e6e9ee;
+      --blue:#155eef; --blue-wash:#eef4ff; --paper:#fff; --wash:#f8fafc;
+      --green:#067647; --green-wash:#ecfdf3; --amber:#b54708; --amber-wash:#fffaeb;
+      --red:#b42318; --red-wash:#fef3f2;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; color: var(--ink); background: var(--wash); font: 16px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    main { width: min(920px, calc(100% - 32px)); margin: 40px auto; padding: clamp(24px, 6vw, 64px); background: var(--paper); border: 1px solid var(--line); border-radius: 20px; }
-    h1 { margin: 0 0 8px; font-size: clamp(40px, 8vw, 72px); line-height: .98; letter-spacing: -.05em; }
-    h2 { margin: 48px 0 12px; font-size: 24px; letter-spacing: -.02em; }
-    p, li { max-width: 72ch; }
-    .eyebrow { color: var(--blue); font-size: 13px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-    .lede { color: var(--muted); font-size: 20px; }
-    .card { margin-top: 24px; padding: 20px; background: var(--wash); border: 1px solid var(--line); border-radius: 12px; }
-    code { padding: 2px 6px; border-radius: 5px; background: #eef4ff; }
+    body {
+      margin:0; color:var(--ink); background:var(--wash);
+      font:16px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing:antialiased;
+    }
+    main {
+      width:min(960px, calc(100% - 32px)); margin:40px auto; padding:clamp(24px,6vw,64px);
+      background:var(--paper); border:1px solid var(--line); border-radius:20px;
+    }
+    h1 { margin:0 0 10px; font-size:clamp(38px,7vw,64px); line-height:.98; letter-spacing:-.05em; }
+    h2 {
+      margin:56px 0 14px; font-size:24px; letter-spacing:-.02em;
+      padding-bottom:8px; border-bottom:1px solid var(--hair);
+    }
+    h3 { margin:32px 0 8px; font-size:16px; letter-spacing:-.01em; }
+    p, li { max-width:74ch; }
+    ul, ol { padding-left:22px; }
+    li { margin:5px 0; }
+    .eyebrow { color:var(--blue); font-size:13px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin:0 0 6px; }
+    .lede { color:var(--muted); font-size:20px; line-height:1.5; max-width:70ch; }
+    .card { margin-top:24px; padding:20px 22px; background:var(--wash); border:1px solid var(--line); border-radius:12px; }
+    .card p { margin:6px 0; }
+    code { padding:2px 6px; border-radius:5px; background:var(--blue-wash); font-family:var(--mono); font-size:.88em; }
+    pre {
+      margin:14px 0; padding:16px 18px; background:#0f1622; color:#e6edf7; border-radius:10px;
+      overflow-x:auto; font-family:var(--mono); font-size:13px; line-height:1.6;
+    }
+    pre code { background:none; color:inherit; padding:0; font-size:inherit; }
+
+    .fill { background:#fef08a; padding:1px 7px; border-radius:4px; font-weight:700; color:#713f12; }
+
+    .scroll { overflow-x:auto; margin:16px 0; }
+    table { border-collapse:collapse; width:100%; font-size:14.5px; min-width:520px; }
+    th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--hair); vertical-align:top; }
+    th { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:700; }
+    td.num, th.num { text-align:right; font-family:var(--mono); font-size:13px; white-space:nowrap; }
+
+    .pill { display:inline-block; padding:1px 9px; border-radius:99px; font-size:12px; font-weight:700; white-space:nowrap; }
+    .pill.nested { background:var(--green-wash); color:var(--green); }
+    .pill.direct { background:var(--amber-wash); color:var(--amber); }
+
+    .note {
+      margin:20px 0; padding:14px 18px; border-left:3px solid var(--blue);
+      background:var(--blue-wash); border-radius:0 8px 8px 0;
+    }
+    .note.warn { border-left-color:var(--amber); background:var(--amber-wash); }
+    .note p { margin:0; max-width:none; }
+    .note strong { font-weight:750; }
+
+    figure { margin:24px 0 8px; }
+    figure svg { display:block; width:100%; height:auto; }
+    figcaption { margin-top:10px; color:var(--muted); font-size:13.5px; }
+
+    .grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fit, minmax(230px,1fr)); margin:18px 0; }
+    .stat { padding:14px 16px; border:1px solid var(--line); border-radius:10px; background:var(--wash); }
+    .stat b { display:block; font-size:26px; letter-spacing:-.02em; font-family:var(--mono); }
+    .stat span { color:var(--muted); font-size:13px; }
+    footer { margin-top:56px; padding-top:18px; border-top:1px solid var(--hair); color:var(--faint); font-size:13px; }
   </style>
 </head>
 <body>
   <main>
-    <p class="eyebrow">Agents vs Wall Street</p>
-    <h1>Team name</h1>
-    <p class="lede">In one sentence, explain what your agent does and what makes the approach worth understanding.</p>
+    <p class="eyebrow">Agents vs Wall Street · 16 August 2026</p>
+    <h1>Aquara</h1>
+    <p class="lede">
+      An analyst agent that reads the filings itself, is not allowed to state a number it
+      cannot quote, and hands every figure to a causal backtest that decides — from unseen
+      evidence alone — whether the model is trusted over the filing.
+    </p>
 
     <div class="card">
-      <p>Agent name: <strong>add agent name</strong></p>
-      <p>Team: <strong>add everyone's name</strong></p>
-      <p>Build style and harness: <strong>add headless agent, coding harness or hybrid setup</strong></p>
-      <p>Models: <strong>add the primary models</strong></p>
+      <p>Agent name: <strong>Aquara Navigator</strong></p>
+      <p>Team: <strong>Boxuan Wang, Hao Sun</strong> <span style="color:var(--faint)">(contact details are in the private entry record, not on this page)</span></p>
+      <p>Build harness: <strong>Claude Code (Opus 5) and OpenAI Codex</strong> — our normal unmodified coding harness, declared in <code>entry.json</code>; work was done on a shared private repository through pull requests</p>
+      <p>Runtime model: <strong>OpenAI gpt-4o-mini</strong>, temperature 0, disk-cached</p>
+      <p>Repository: <strong>github.com/liefsun/agents-vs-wall-street</strong> · final commit <code><span class="fill">HASH</span></code></p>
     </div>
 
+    <!-- ══════════════════════════════════════════════════════════════════ -->
     <section>
       <h2>How it works</h2>
-      <p>Explain the path from a company ticker to the three forecasts. Name the main stages, models, tools and data sources. A simple diagram is welcome.</p>
+
+      <p>
+        One command turns a manifest of four companies into four completed OpenStocks
+        workbooks. The path from a ticker to a number has five stages, and each one is
+        allowed to refuse.
+      </p>
+
+      <figure>
+        <svg viewBox="0 0 900 826" role="img" aria-label="Pipeline diagram from the challenge manifest through research, history, models, nested selection and the evidence gate to the four workbooks">
+          <defs>
+            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#98a2b3"/>
+            </marker>
+            <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#067647"/>
+            </marker>
+            <marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#b54708"/>
+            </marker>
+          </defs>
+          <style>
+            .bx { fill:#fff; stroke:#d0d5dd; }
+            .t  { font:600 13.5px Inter, system-ui, sans-serif; fill:#101828; }
+            .s  { font:11.5px ui-monospace, Menlo, monospace; fill:#667085; }
+            .lb { font:700 10.5px Inter, system-ui, sans-serif; fill:#98a2b3; letter-spacing:.1em; }
+            .ed { stroke:#98a2b3; stroke-width:1.3; fill:none; }
+          </style>
+
+          <!-- input -->
+          <rect class="bx" x="300" y="10" width="300" height="46" rx="9" fill="#eef4ff" stroke="#155eef"/>
+          <text class="t" x="450" y="31" text-anchor="middle">challenge/companies.json</text>
+          <text class="s" x="450" y="47" text-anchor="middle">4 companies · 3 metrics each · 12 numbers</text>
+          <path class="ed" d="M450,56 L450,84" marker-end="url(#a)"/>
+
+          <!-- P1 research -->
+          <text class="lb" x="24" y="106">P1 · RESEARCH AGENT</text>
+          <rect class="bx" x="24" y="116" width="852" height="150" rx="11" fill="#fbfcfe"/>
+          <text class="s" x="42" y="136">agent/research.py — an LLM working to a per-metric analyst brief</text>
+
+          <rect class="bx" x="42" y="148" width="184" height="46" rx="8"/>
+          <text class="t" x="134" y="169" text-anchor="middle">retrieve</text>
+          <text class="s" x="134" y="185" text-anchor="middle">earnings releases</text>
+          <path class="ed" d="M226,171 L250,171" marker-end="url(#a)"/>
+
+          <rect class="bx" x="250" y="148" width="184" height="46" rx="8"/>
+          <text class="t" x="342" y="169" text-anchor="middle">excerpt</text>
+          <text class="s" x="342" y="185" text-anchor="middle">≤8 windows · ≤6000 ch</text>
+          <path class="ed" d="M434,171 L458,171" marker-end="url(#a)"/>
+
+          <rect class="bx" x="458" y="148" width="184" height="46" rx="8" fill="#eef4ff" stroke="#155eef"/>
+          <text class="t" x="550" y="169" text-anchor="middle">read · temp 0 · cached</text>
+          <text class="s" x="550" y="185" text-anchor="middle">value + verbatim quote</text>
+          <path class="ed" d="M642,171 L666,171" marker-end="url(#a)"/>
+
+          <rect class="bx" x="666" y="148" width="192" height="46" rx="8" fill="#fef3f2" stroke="#b42318"/>
+          <text class="t" x="762" y="169" text-anchor="middle">validation gate</text>
+          <text class="s" x="762" y="185" text-anchor="middle">reject on any failure</text>
+
+          <text class="s" x="42" y="222">gate · quote must appear verbatim in the source · value in plausible range · self-declared</text>
+          <text class="s" x="42" y="238">low confidence refused · a null answer stays null · disagreement with the parser &gt;2% drops the period</text>
+          <text class="s" x="42" y="256">fallback · with no API key the agent is unavailable and the deterministic parsers take over</text>
+          <path class="ed" d="M450,266 L450,294" marker-end="url(#a)"/>
+
+          <!-- history -->
+          <rect class="bx" x="196" y="294" width="508" height="52" rx="9"/>
+          <text class="t" x="450" y="316" text-anchor="middle">agent/history.py — point-in-time series</text>
+          <text class="s" x="450" y="333" text-anchor="middle">first report per period · quarterly season 4 · Hays H1/FY season 2</text>
+          <path class="ed" d="M450,346 L450,374" marker-end="url(#a)"/>
+
+          <!-- P2 methodology -->
+          <text class="lb" x="24" y="368">P2 · METHODOLOGY</text>
+          <rect class="bx" x="230" y="374" width="440" height="46" rx="9" fill="#f8fafc"/>
+          <text class="t" x="450" y="395" text-anchor="middle">Methodology 1 — fixed, not hot-swappable</text>
+          <text class="s" x="450" y="411" text-anchor="middle">loss · gate · point-in-time rule · ensemble caps</text>
+          <path class="ed" d="M450,420 L450,448" marker-end="url(#a)"/>
+
+          <!-- P3 candidates -->
+          <text class="lb" x="24" y="442">P3 · CANDIDATES</text>
+          <rect class="bx" x="130" y="448" width="640" height="52" rx="9" fill="#fffaeb" stroke="#b54708"/>
+          <text class="t" x="450" y="470" text-anchor="middle">seasonal_naive · naive_last · drift_mult · drift_add · trend_mult · ar_lag · ets_hw</text>
+          <text class="s" x="450" y="487" text-anchor="middle">seasonal_naive is the mandatory baseline · JSON nodes hot-swap in without a code change</text>
+          <path class="ed" d="M450,500 L450,528" marker-end="url(#a)"/>
+
+          <!-- P3.5 nested -->
+          <text class="lb" x="24" y="522">P3.5 · NESTED CAUSAL SELECTION</text>
+          <rect class="bx" x="126" y="528" width="648" height="62" rx="9"/>
+          <text class="t" x="450" y="550" text-anchor="middle">inner: choose the config from origins strictly before the target</text>
+          <text class="t" x="450" y="568" text-anchor="middle">outer: score on unseen targets vs paired seasonal naive</text>
+          <text class="s" x="450" y="583" text-anchor="middle">quarterly 12/6/8 · semiannual 6/3/4 · configs: current · responsive · diversified · strict</text>
+          <path class="ed" d="M450,590 L450,618" marker-end="url(#a)"/>
+
+          <!-- P4 gate -->
+          <text class="lb" x="24" y="612">P4 · EVIDENCE GATE</text>
+          <rect class="bx" x="230" y="618" width="440" height="54" rx="9" fill="#fef3f2" stroke="#b42318"/>
+          <text class="t" x="450" y="640" text-anchor="middle">≥3 outer origins ∧ outer skill &gt; 0</text>
+          <text class="t" x="450" y="658" text-anchor="middle">∧ no seasonal-naive fallback ∧ ensemble skill &gt; 0</text>
+
+          <path class="ed" d="M330,672 L330,700 L232,700 L232,724" stroke="#067647" marker-end="url(#ag)"/>
+          <path class="ed" d="M570,672 L570,700 L668,700 L668,724" stroke="#b54708" marker-end="url(#aa)"/>
+
+          <rect class="bx" x="96" y="724" width="272" height="46" rx="8" fill="#ecfdf3" stroke="#067647"/>
+          <text class="t" x="232" y="745" text-anchor="middle">gate passes → nested ensemble</text>
+          <text class="s" x="232" y="761" text-anchor="middle">8 of 12 metrics</text>
+
+          <rect class="bx" x="532" y="724" width="272" height="46" rx="8" fill="#fffaeb" stroke="#b54708"/>
+          <text class="t" x="668" y="745" text-anchor="middle">gate fails → sourced direct</text>
+          <text class="s" x="668" y="761" text-anchor="middle">4 of 12 metrics</text>
+
+          <path class="ed" d="M232,770 L232,788 L450,788" />
+          <path class="ed" d="M668,770 L668,788 L450,788" />
+          <path class="ed" d="M450,788 L450,800" marker-end="url(#a)"/>
+          <text class="t" x="450" y="810" text-anchor="middle">P5 · workbook.py → submission/*.xlsx</text>
+        </svg>
+        <figcaption>
+          Every box can refuse. The research agent refuses an unquotable figure, the history
+          layer refuses an ambiguous period, and the evidence gate refuses a model that has
+          not beaten seasonal naive on targets it never saw.
+        </figcaption>
+      </figure>
+
+      <h3>The final command</h3>
+      <pre><code>uv run --with-requirements agent/requirements.txt python -m agent.run
+npm run check:forecasts</code></pre>
+      <p>
+        It processes all four companies in one process, writes the four workbooks by filling
+        only the forecast cells of the supplied templates, and emits a nested-evaluation
+        report. Nothing is uploaded programmatically — a person checks the files and uploads
+        them to OpenStocks by hand.
+      </p>
     </section>
 
+    <!-- ══════════════════════════════════════════════════════════════════ -->
     <section>
       <h2>Research and financial reasoning</h2>
-      <p>Explain how the agent finds information, interprets the requested metrics and units, deals with conflicting evidence and turns the research into a forecast.</p>
+
+      <h3>The agent reads; it does not guess</h3>
+      <p>
+        Each of the twelve targets has an analyst brief written the way you would brief a
+        junior analyst: the exact basis wanted, and the traps to avoid. Home Depot's brief
+        says total-company comparable sales in percentage points and explicitly rules out the
+        U.S. figure. Analog Devices' EPS brief says adjusted, not GAAP, and to return null
+        rather than substitute. Deere's segment brief says the operating profit of Production
+        &amp; Precision Agriculture, not its net sales.
+      </p>
+      <p>
+        The agent then reads the candidate filings and returns the figure <em>that document
+        reports for its own period</em>, plus the sentence it took it from. Reporting the
+        current period only is the whole discipline: filings restate prior-year comparatives
+        and year-to-date totals right next to the current number, and those are the traps that
+        quietly corrupt a backtest.
+      </p>
+
+      <h3>Why the numbers stay auditable</h3>
+      <p>
+        The agent extracts <strong>reported historical facts</strong>, never a forecast. That
+        boundary is what makes the output checkable: a claimed fact has a source sentence, and
+        the sentence either is in the document or it is not. Forecasting is left to the
+        deterministic statistical layer, where the choice of model is decided by measured
+        performance on unseen data rather than by anyone's opinion.
+      </p>
+      <div class="note">
+        <p>
+          <strong>The one check that does the most work:</strong> an extraction is discarded
+          unless its supporting quote appears verbatim in the source document. A model that
+          invents a plausible sentence fails this immediately, and a model that paraphrases a
+          real one fails it too. This is cheap, and it is the difference between a citation
+          and a decoration.
+        </p>
+      </div>
+
+      <h3>Conflicting evidence</h3>
+      <p>
+        Hays publishes a short canonical release and a very long duplicate on the same day,
+        and the long one repeats its financial statements thousands of lines later. Ranking by
+        filename or taking the largest matching number selected weighted-share counts as
+        earnings per share. Same-period candidates are now ranked by exact label match,
+        position in the document, plausibility and first-report timestamp.
+      </p>
+      <p>
+        Where a metric has both an agent reading and a deterministic parser reading, the two
+        are compared and every disagreement beyond 2% is recorded. The agent's reading wins,
+        because it is the only one that can show its evidence: a sentence checked to exist in
+        the document and to contain the number being claimed.
+      </p>
+      <div class="note warn">
+        <p>
+          <strong>The disagreement that settled this design.</strong> For Analog Devices' Q3
+          2020 revenue the parser returned 8,200 and the agent returned 1,456. The quarter's
+          10-Q states <code>Revenue $ 1,456,136</code> in a thousands table. The parser had
+          matched <em>“expected revenue of $8.2 billion on a pro forma basis”</em> — a
+          combined-company figure from the Maxim merger announcement, in a different document,
+          about a different entity, for a different period. Our first policy was to drop any
+          period where the two disagreed; that policy would have discarded the correct reading
+          and then fallen back to the series containing the wrong one. Deferring to whichever
+          reading is corroborated by its own quote is what fixed it, and ADI revenue's measured
+          skill went from 49.8% to 62.1% as a result.
+        </p>
+      </div>
     </section>
 
+    <!-- ══════════════════════════════════════════════════════════════════ -->
     <section>
       <h2>Important design choices</h2>
-      <p>Describe the decisions that most affected autonomy, quality, runtime or cost. Include the alternatives you rejected and why.</p>
+
+      <h3>The model never picks the number</h3>
+      <p>
+        The obvious build is to show an LLM the filings and ask for a forecast. We rejected it
+        because it cannot be audited: when the answer is wrong there is nothing to inspect. So
+        the LLM was given the job it is genuinely better at than a regular expression —
+        reading prose and tables written by humans — and the forecast itself is produced by
+        models whose historical error is measured.
+      </p>
+
+      <h3>Selection is nested and causal, not chosen in hindsight</h3>
+      <p>
+        Picking the configuration that performed best over the whole history and then quoting
+        that history as evidence is the standard way to fool yourself. Instead the
+        configuration for each target is selected using only origins strictly before it, and
+        performance is reported only on targets the selection never saw. The deployment
+        recommendation is computed separately and excluded from the reported skill.
+      </p>
+
+      <h3>A gate that is allowed to reject our own work</h3>
+      <p>
+        A nested forecast replaces the filing-based one only with at least three unseen outer
+        origins, positive outer skill against a paired seasonal-naive baseline, no fallback to
+        that baseline, and positive deployment-ensemble skill. It currently rejects five of
+        twelve metrics — including all three Hays metrics, where the machinery works but has
+        no measured edge.
+      </p>
+
+      <h3>Reproducibility over cleverness</h3>
+      <p>
+        Completions are temperature 0 and cached to disk by request. Once the cache is warm the
+        final run makes no network calls at all, so it reproduces offline and byte-for-byte.
+        The workbook writer starts from the supplied template and locates the header row using
+        the same rule as the organisers' checker, so the sheet the checker validates is left
+        structurally untouched.
+      </p>
+
+      <h3>What we tried and abandoned</h3>
+      <ul>
+        <li><strong>Hand-written regular expressions for reading.</strong> They worked until they did not, and their failures were silent — a pattern would match a nearby number in a different row. Replaced by the research agent with a quote requirement.</li>
+        <li><strong>Substituting GAAP EPS where adjusted EPS was missing.</strong> It would have removed a skip and made coverage look better. It is a different metric, so the skip stays.</li>
+        <li><strong>Treating Hays fiscal years as a quarterly axis.</strong> Its H1/FY reporting is semiannual; forcing season 4 onto it produced meaningless seasonal comparisons. It now runs on season 2 with its own pre-registered protocol.</li>
+        <li><strong>A second methodology (historical-analogue matching with weighted scenarios) and an LLM orchestrator choosing between the two per metric.</strong> Built and explored on a branch. It is not in the submission path: it bypasses the causal evidence gate, and we were not willing to swap a measured selector for an unmeasured one on the day.</li>
+      </ul>
     </section>
 
+    <!-- ══════════════════════════════════════════════════════════════════ -->
     <section>
       <h2>Checks and tests</h2>
-      <p>Show how the system catches missing information, bad units, implausible values, malformed workbooks and failed model calls. Explain what you tested and what happened.</p>
+
+      <div class="grid">
+        <div class="stat"><b>44</b><span>automated tests passing</span></div>
+        <div class="stat"><b>12 / 12</b><span>metrics with scoreable history</span></div>
+        <div class="stat"><b>83</b><span>genuinely unseen predictions</span></div>
+        <div class="stat"><b>21.7%</b><span>outer skill vs seasonal naive</span></div>
+      </div>
+
+      <h3>The gate was proven to reject before any pass was believed</h3>
+      <p>
+        A validation gate that has only ever seen good input is not evidence of anything.
+        <code>tests/test_research.py</code> drives every rejection path with a stubbed driver:
+        a fabricated quote, an implausible value, a missing quote, self-declared low
+        confidence, a non-numeric value, and an honest refusal. Writing those tests caught two
+        real defects — a shared cache was serving the first case's answer to all later cases,
+        so all six gates falsely appeared to pass, and the excerpt builder overran its
+        character budget by the length of its own separators.
+      </p>
+
+      <h3>What each layer checks</h3>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Layer</th><th>Refuses</th></tr></thead>
+          <tbody>
+            <tr><td>Research agent</td><td>unquotable figures, implausible values, low self-confidence, the wrong accounting basis</td></tr>
+            <tr><td>History layer</td><td>ambiguous periods, later comparatives standing in for a missing original, cross-check disagreements over 2%</td></tr>
+            <tr><td>Backtest</td><td>any candidate that does not beat seasonal naive on identical paired origins</td></tr>
+            <tr><td>Evidence gate</td><td>nested forecasts without enough unseen origins or positive skill</td></tr>
+            <tr><td>Stats control</td><td>non-finite values, out-of-range numbers, wrong signs, malformed bands</td></tr>
+            <tr><td>Workbook writer</td><td>a template whose <code>Metric / Units / period</code> header cannot be located — it raises rather than writing a blank</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Measured outer performance</h3>
+      <p>
+        All twelve metrics now have enough first-report history to score honestly. Across 28
+        company-local outer rounds the nested policy produced 83 unseen predictions at an
+        aggregate relative MAE of 0.783 — a 21.7% improvement on the paired seasonal-naive
+        baseline.
+      </p>
+      <div class="note">
+        <p>
+          <strong>Before the research agent read the corpus, only ten of the twelve metrics
+          could be scored at all</strong>, on 66 predictions, for 21.9% skill. Reading the
+          filings properly did not inflate that headline — it is the same number measured
+          over a fifth more evidence, with the two previously unscoreable metrics brought in
+          and judged on their merits. One of them, Home Depot's comparable sales, earned its
+          way past the gate at 37.9%; the other did not.
+        </p>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Metric</th><th class="num">Outer origins</th><th class="num">Relative MAE</th><th class="num">Skill</th><th>Used</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>ADI · Revenue</td><td class="num">8</td><td class="num">0.379</td><td class="num">62.1%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>ADI · Adjusted diluted EPS</td><td class="num">8</td><td class="num">0.444</td><td class="num">55.6%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>ADI · Adjusted gross margin</td><td class="num">8</td><td class="num">0.461</td><td class="num">53.9%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>HD · Comparable sales, total company</td><td class="num">8</td><td class="num">0.621</td><td class="num">37.9%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>HD · Net sales</td><td class="num">8</td><td class="num">0.752</td><td class="num">24.8%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>DE · Production &amp; Precision Ag operating profit</td><td class="num">8</td><td class="num">0.756</td><td class="num">24.4%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>DE · Worldwide net sales and revenues</td><td class="num">8</td><td class="num">0.811</td><td class="num">18.9%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>DE · Diluted EPS (GAAP)</td><td class="num">8</td><td class="num">0.981</td><td class="num">1.9%</td><td><span class="pill nested">nested</span></td></tr>
+            <tr><td>HD · Adjusted diluted EPS</td><td class="num">7</td><td class="num">1.000</td><td class="num">0.0%</td><td><span class="pill direct">direct</span></td></tr>
+            <tr><td>Hays · Net fees</td><td class="num">4</td><td class="num">1.000</td><td class="num">0.0%</td><td><span class="pill direct">direct</span></td></tr>
+            <tr><td>Hays · Pre-exceptional operating profit</td><td class="num">4</td><td class="num">1.006</td><td class="num">−0.6%</td><td><span class="pill direct">direct</span></td></tr>
+            <tr><td>Hays · Pre-exceptional basic EPS</td><td class="num">4</td><td class="num">1.012</td><td class="num">−1.2%</td><td><span class="pill direct">direct</span></td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
+    <!-- ══════════════════════════════════════════════════════════════════ -->
     <section>
-      <h2>Reproducing the run</h2>
-      <p>State what someone needs to install or configure, the command they run and any remaining human input. Explain how the system accepts the company and metric specification.</p>
+      <h2>Seeing inside the run</h2>
+
+      <p>
+        The pipeline is a command, but we did not build it blind. <code>agent/app.py</code> is a
+        local inspection surface we used throughout the build, and it is the fastest way for
+        someone else to check any one of the twelve numbers: every figure on it traces back to a
+        candidate leaderboard and to the sentence it was read from, in two clicks.
+      </p>
+
+      <pre><code>uv run --with-requirements agent/requirements.txt python -m agent.app   # http://127.0.0.1:8010</code></pre>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Route</th><th>What it shows</th></tr></thead>
+          <tbody>
+            <tr><td><code>/</code></td><td>Four companies × three metrics — fused point, band, and the basis each figure rests on</td></tr>
+            <tr><td><code>/graph</code></td><td>The whole pipeline as a node graph. Click a node to read its spec; press ▶ Run and the nodes light up over a server-sent event stream as the agent executes them, with a live log</td></tr>
+            <tr><td><code>/graph?t=…</code></td><td>The governed graph for one company and metric, with edge thickness set by the learned ensemble weight</td></tr>
+            <tr><td><code>/c/&lt;ticker&gt;</code></td><td>Per-metric candidate leaderboard: backtest error, prediction, weight, origin count, eligibility, guidance anchor, actual-series sparkline, evidence trail</td></tr>
+            <tr><td><code>/output</code></td><td>Which of the twelve came from the nested ensemble and which fell back to direct, plus the template contract and checker status</td></tr>
+            <tr><td><code>/backtest</code></td><td>The prequential backtest results and their analysis</td></tr>
+            <tr><td><code>/run</code></td><td>Writes the four workbooks and reports checker-shape status</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Adding a candidate model without touching the code</h3>
+      <p>
+        The graph page carries a hot-swap form. Paste a JSON node — <code>id</code>,
+        <code>label</code>, which metric kinds it applies to, and a spec such as
+        <code>{"type": "ewma", "alpha": 0.4}</code> — and <strong>Validate</strong> runs the same
+        pre-live check the agent runs. <strong>Validate + Save</strong> writes it to
+        <code>agent/nodes/models/</code>, where it competes against the existing candidates on the
+        next run. It still has to beat seasonal naive through the same nested selection to reach a
+        workbook: the door is open, the gate is not.
+      </p>
+
+      <div class="note">
+        <p>
+          <strong>The graph is generated, not drawn.</strong> Both SVGs are built from the live
+          manifest and forecast objects at request time, so the picture cannot drift away from the
+          code the way a hand-maintained diagram does. This app is a development and inspection
+          surface, not part of the submission path — the submitted workbooks come from the single
+          command above it.
+        </p>
+      </div>
     </section>
 
+    <!-- ══════════════════════════════════════════════════════════════════ -->
     <section>
-      <h2>Known weaknesses</h2>
-      <p>Be specific about where the agent still needs human help, where it may fail and what you would improve next.</p>
+      <h2>Known weaknesses and what comes next</h2>
+
+      <div class="note warn">
+        <p>
+          <strong>The four direct forecasts are the weakest numbers we are submitting</strong> —
+          they are the ones the evidence gate declined to promote, so they rest on stated
+          assumptions rather than measured skill. We would rather name them precisely than
+          average them into a headline.
+        </p>
+      </div>
+
+      <ul>
+        <li><strong>The direct bridges carry approximations we can point at.</strong> Deere fixes diluted shares at 271m and the Q3 share of second-half net income at 0.57, and estimates segment profit at roughly 55% of net sales on an 18% margin — the nested forecast overrides that last one, and the two differ by about a factor of two. The Hays EPS bridge applies an after-tax-per-share ratio instead of the full accounting identity. Reading each constant from the filing is the next change, in that order.</li>
+        <li><strong>Coverage limits we declined to paper over.</strong> Home Depot's adjusted EPS is a recent non-GAAP disclosure; the agent found nine observations where the parser found seven, and refused on the other forty filings because they state GAAP EPS only. That is now enough to score, and it scores 0.0% — so it stays direct on measured merit rather than for want of data. All three Hays metrics backtest cleanly and show zero to slightly negative outer skill: a working pipeline, reported as working rather than as useful.</li>
+        <li><strong>Retrieval is keyword-based and each document is read once.</strong> Wording we did not anticipate never reaches the agent, and the agent cannot ask for a document it was not given. A second independent read with disagreement arbitration is the clearest next gain and is already scoped.</li>
+        <li><strong>The plausibility bounds are hand-set.</strong> They catch unit and order-of-magnitude errors, not a wrong-but-reasonable number — which is exactly why the verbatim-quote requirement, not the bounds, is the load-bearing check.</li>
+      </ul>
+
+      <p>
+        Three decisions stay with a human: the analyst briefs, the plausibility bounds, and
+        whether to trust the gate when it overrides a filing-based number by a wide margin.
+        Submission is also deliberately manual — a person checks the four workbooks and uploads
+        them.
+      </p>
     </section>
 
+    <!-- ══════════════════════════════════════════════════════════════════ -->
     <section>
       <h2>How to reproduce the final run</h2>
       <div class="card">
-        <p>Final commit: <code>add commit hash</code></p>
-        <p>Final command: <code>add command</code></p>
+        <p>Final commit: <code><span class="fill">HASH</span></code></p>
+        <p>Final command: <code>uv run --with-requirements agent/requirements.txt python -m agent.run</code></p>
         <p>Expected output: four completed workbooks in <code>submission/</code>.</p>
       </div>
+      <p>
+        Requirements: Python with <code>uv</code>, Node for the organisers' checker, and the
+        repository's frozen corpus. An <code>OPENAI_API_KEY</code> in <code>.env</code> enables
+        the research agent; the cached completions are committed, so a reviewer reproduces the
+        submitted numbers without a key and without network access. Running with no key and a
+        cold cache falls back to the deterministic parsers, which is a different and clearly
+        labelled configuration.
+      </p>
+      <p>
+        The company and metric specification is not hard-coded into the run: it is read from
+        <code>challenge/companies.json</code>, and the metric labels, units and fiscal-period
+        header in each workbook are matched against it.
+      </p>
+      <pre><code>cp .env.example .env          # set OPENAI_API_KEY
+uv run --with-requirements agent/requirements.txt --with pytest python -m pytest -q
+uv run --with-requirements agent/requirements.txt python -m agent.run
+npm run check:submission</code></pre>
     </section>
+
+    <footer>
+      Agents vs Wall Street · architecture write-up · figures in this page were taken from the
+      tracked evaluation report and verified against a run of the committed code.
+    </footer>
   </main>
 </body>
 </html>

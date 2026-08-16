@@ -30,7 +30,6 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import candidates
-from .corpus import ROOT
 
 NODES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nodes", "models")
 
@@ -66,9 +65,9 @@ CODE_PRODUCERS = {
 
 # built-in code nodes (declared, but bound to CODE_PRODUCERS)
 _BUILTIN = [
-    {"id": "seasonal_naive", "label": "Seasonal naive · same qtr last year", "plug": "no",
+    {"id": "seasonal_naive", "label": "Seasonal naive · same period last year", "plug": "no",
      "producer": "seasonal_naive", "note": "mandatory baseline every model must beat"},
-    {"id": "naive_last", "label": "Naive · last quarter", "plug": "code", "producer": "naive_last"},
+    {"id": "naive_last", "label": "Naive · last reported period", "plug": "code", "producer": "naive_last"},
     {"id": "drift_mult", "label": "Seasonal drift · median YoY growth", "plug": "code", "producer": "drift_mult"},
     {"id": "drift_add", "label": "Seasonal drift · median YoY change", "plug": "code", "producer": "drift_add"},
     {"id": "trend_mult", "label": "Seasonal + growth trend", "plug": "code", "producer": "trend_mult"},
@@ -132,11 +131,12 @@ class ModelNode:
     enabled: bool = True
     note: str = ""
     source: str = "code"                 # code | json
+    season: int = candidates.SEASON
 
     def predict(self, y: list[float]):
         if self.producer:
             fn = CODE_PRODUCERS.get(self.producer)
-            return fn(y) if fn else None
+            return fn(y, season=self.season) if fn else None
         if self.spec:
             return _interp(self.spec, y)
         return None
@@ -145,13 +145,14 @@ class ModelNode:
         return {"id": self.id, "label": self.label, "phase": self.phase, "plug": self.plug,
                 "kind": self.kind, "producer": self.producer, "spec": self.spec,
                 "applies_to": self.applies_to, "enabled": self.enabled, "note": self.note,
-                "source": self.source}
+                "source": self.source, "season": self.season}
 
 
-def load_models() -> list[ModelNode]:
+def load_models(season: int = candidates.SEASON) -> list[ModelNode]:
     """Built-in code nodes + hot-swap JSON nodes from agent/nodes/models/*.json."""
     out = [ModelNode(id=d["id"], label=d["label"], plug=d.get("plug", "code"),
-                     producer=d.get("producer"), note=d.get("note", ""), source="code")
+                     producer=d.get("producer"), note=d.get("note", ""), source="code",
+                     season=season)
            for d in _BUILTIN]
     if os.path.isdir(NODES_DIR):
         for fn in sorted(os.listdir(NODES_DIR)):
@@ -164,15 +165,20 @@ def load_models() -> list[ModelNode]:
                     id=d["id"], label=d.get("label", d["id"]), plug=d.get("plug", "hot"),
                     producer=d.get("producer"), spec=d.get("spec"),
                     applies_to=d.get("applies_to", ["money", "eps", "pct"]),
-                    enabled=d.get("enabled", True), note=d.get("note", ""), source="json"))
-            except Exception as exc:
+                    enabled=d.get("enabled", True), note=d.get("note", ""), source="json",
+                    season=season))
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                 out.append(ModelNode(id=f"BROKEN:{fn}", label=f"invalid JSON node ({exc})",
                                      plug="hot", enabled=False, source="json"))
     return out
 
 
-def active_models(kind: str) -> list[ModelNode]:
-    return [m for m in load_models() if m.enabled and (not m.applies_to or kind in m.applies_to)]
+def active_models(kind: str, season: int = candidates.SEASON) -> list[ModelNode]:
+    return [
+        model
+        for model in load_models(season=season)
+        if model.enabled and (not model.applies_to or kind in model.applies_to)
+    ]
 
 
 # ── node validation (agent judges a node BEFORE it goes live; no data fetch) ──
@@ -199,7 +205,7 @@ def validate_node(node: dict) -> dict:
         m = ModelNode(id=node["id"], label=node.get("label", node["id"]),
                       producer=node.get("producer"), spec=node.get("spec"))
         p = m.predict(_SAMPLE)
-    except Exception as exc:
+    except (ArithmeticError, TypeError, ValueError, np.linalg.LinAlgError) as exc:
         return {"verdict": "invalid", "schema_ok": True,
                 "messages": [f"raised {type(exc).__name__}: {exc}"], "warnings": warns}
     if p is None:
