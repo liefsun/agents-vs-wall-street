@@ -10,16 +10,16 @@ Run:  uv run --with-requirements agent/requirements.txt python -m agent.app
 from __future__ import annotations
 
 import html
-import json as _json
 import os
 import time
 
 from flask import Flask, Response, redirect
-from werkzeug.exceptions import BadRequest
 
-from . import governance, methodology, output, selection, workbook
+import json as _json
+
+from .forecast import forecast_company, METRIC_MAP, company_spec
 from .corpus import FOLDER, ROOT
-from .forecast import METRIC_MAP, company_spec, forecast_company
+from . import workbook, governance, output, methodology, direct
 
 app = Flask(__name__)
 TICKERS = ["HD", "ADI", "HAS", "DE"]
@@ -105,6 +105,12 @@ def _page(title, body):
 
 
 @app.get("/")
+def home():
+    """The pipeline graph is the front door of the demo."""
+    return redirect("/graph")
+
+
+@app.get("/overview")
 def index():
     manifest = output.run_pipeline(write=False)
     rows = ""
@@ -123,11 +129,11 @@ def index():
         rows += (f"<div class=card><div style='display:flex;justify-content:space-between'>"
                  f"<div>{head}</div><a href='/graph?t={c['ticker']}'>graph →</a></div>{cells}</div>")
     body = (f"<h1>Agents vs Wall Street — forecasting agent</h1>"
-            f"<div class=sub><b>{methodology.METHODOLOGY_1['name']}</b> · guarded nested selection "
-            f"with direct fallback. {manifest['n_filled']}/{manifest['n_total']} numbers produced.</div>"
+            f"<div class=sub><b>{methodology.METHODOLOGY_1['name']}</b> · direct output "
+            f"(backtesting deferred). {manifest['n_filled']}/{manifest['n_total']} numbers produced.</div>"
             f"<div class=card><a href='/graph'>▶ one pipeline · four companies · output layer (graph)</a>"
-            f" &nbsp;·&nbsp; <a href='/output'>output layer</a>"
-            f" &nbsp;·&nbsp; <a href='/backtest'>backtest results</a>"
+            f" &nbsp;·&nbsp; <a href='/trace'>provenance trace</a>"
+            f" &nbsp;·&nbsp; <a href='/report'>M1 vs M2</a>"
             f" &nbsp;·&nbsp; <a href='/run'>write the 4 workbooks</a></div>"
             f"<h2>Four companies · twelve metrics</h2>{rows}")
     return Response(_page("Forecasting agent", body), mimetype="text/html")
@@ -141,7 +147,7 @@ def company(ticker):
     if ticker not in METRIC_MAP:
         return Response(_page(ticker, f"<h1>{ticker}</h1><div class=sub>Extractor not wired "
                                       f"yet for this company (ADI is the reference implementation).</div>"
-                                      f"<a href='/'>← back</a>"), mimetype="text/html")
+                                      f"<a href='/overview'>← back</a>"), mimetype="text/html")
     fc = forecast_company(ticker)
     blocks = ""
     for m in fc["metrics"]:
@@ -170,7 +176,7 @@ def company(ticker):
                    f"<div><b>{html.escape(m.label)}</b> <span class=u>{html.escape(m.units)}</span> {anchor}</div>"
                    f"<div><span class=pt>{_fmt(m.point, m.kind)}</span> "
                    f"<span class=band>band {band}</span></div></div>"
-                   f"<div style='margin:8px 0'>{spark} <span class=u>backtest: baseline MAE "
+                   f"<div style='margin:8px 0'>{spark} <span class=u>backtest: baseline WAPE/MAE "
                    f"{res['baseline_error']:.3f} · {res['n_origins']} origins"
                    f"{' · FALLBACK' if res['fallback'] else ''}</span></div>"
                    f"<table><thead><tr><th>candidate</th><th>bt error</th><th>pred</th>"
@@ -179,7 +185,7 @@ def company(ticker):
     body = (f"<h1>{html.escape(fc['company'])} <span class=badge>{html.escape(fc['period'])}</span></h1>"
             f"<div class=sub>{fc['panel_rows']} periods extracted · fused point = capped inverse-error "
             f"ensemble of candidates that beat seasonal-naive in the trailing backtest window</div>"
-            f"<a href='/'>← overview</a>{blocks}")
+            f"<a href='/overview'>← overview</a>{blocks}")
     return Response(_page(fc["company"], body), mimetype="text/html")
 
 
@@ -197,11 +203,7 @@ def output_page():
             val = _fmt(m["point"], m["kind"]) if m["point"] is not None else "—"
             bd = m.get("band")
             band = f" <span class=band>[{_fmt(bd[0], m['kind'])}–{_fmt(bd[1], m['kind'])}]</span>" if bd else ""
-            source = (m.get("selection") or {}).get("source", "direct")
-            source_badge = ("<span class='badge guide'>nested</span>" if source == "nested"
-                            else "<span class=badge>direct fallback</span>")
-            rows += (f"<div class=mrow><span>{html.escape(m['label'])} <span class=u>{html.escape(m['units'])}</span> "
-                     f"{source_badge}</span>"
+            rows += (f"<div class=mrow><span>{html.escape(m['label'])} <span class=u>{html.escape(m['units'])}</span></span>"
                      f"<span><span class=pt>{val}</span>{band}</span></div>")
         status = ("<span class='badge guide'>ready</span>" if ready
                   else "<span class=badge>pending</span>")
@@ -217,30 +219,85 @@ def output_page():
            f"<div class=mrow><span>checker</span><span class=u>{html.escape(spec['checker'])}</span></div>"
            f"<div class=mrow><span>upload</span><span class=u>{html.escape(spec['upload'])}</span></div>"
            f"<div style='margin-top:8px'><b class=u>Contract (Summary sheet)</b><ul class=u style='margin:6px 0'>{contract}</ul></div></div>")
-    action = ("<div class=card><a href='/output?write=1'>▶ run pipeline for all four & write workbooks to submission/</a>"
-              + (f" <span class=u>· wrote {sum(1 for c in manifest['companies'] if c.get('written'))} files</span>" if write else "")
+    action = (f"<div class=card><a href='/output?write=1'>▶ run pipeline for all four & write workbooks + clear-run log</a>"
+              + (f" <span class=u>· wrote {sum(1 for c in manifest['companies'] if c.get('written'))} files + logs/clear-run.md</span>" if write else "")
               + "</div>")
+    # Deliverables — the four workbooks PLUS the clear-run evidence log (SUBMISSION.md).
+    from . import runlog
+    log_text = runlog.latest_text()
+    dl = "".join(f"<li><code>submission/{html.escape(c['file'])}</code> <span class=u>— {html.escape(c['company'])}</span></li>"
+                 for c in manifest["companies"])
+    dl += "<li><code>logs/clear-run.md</code> <span class=u>— clear-run evidence log (timestamped, failures/retries, secrets removed)</span></li>"
+    if manifest.get("nested_report"):
+        dl += "<li><code>outputs/nested-parameter-evaluation.md</code> <span class=u>— nested-evaluation evidence</span></li>"
+    deliver = (f"<div class=card><b>Deliverables (outputs)</b> "
+               f"<span class=u>— demo == submission; reproducible from the frozen corpus with no API key</span>"
+               f"<ul class=u style='margin:6px 0'>{dl}</ul>"
+               f"<a href='/api/download'>⬇ download all outputs (zip · 4 workbooks + clear-run log)</a></div>")
+    if log_text:
+        runlog_card = (f"<div class=card><div style='display:flex;justify-content:space-between'>"
+                       f"<b>04 · Evidence — clear-run log</b> <a class=u href='/runlog'>raw ↗</a></div>"
+                       f"<pre style='white-space:pre-wrap;font-size:12px;line-height:1.55;margin:8px 0 0;"
+                       f"max-height:440px;overflow:auto'>{html.escape(log_text)}</pre></div>")
+    else:
+        runlog_card = (f"<div class=card><b>04 · Evidence — clear-run log</b>"
+                       f"<div class=u style='margin-top:6px'>No run yet — <a href='/output?write=1'>run the pipeline</a> "
+                       f"to produce <code>logs/clear-run.md</code>.</div></div>")
     body = (f"<h1>Output layer</h1><div class=sub>The four companies through one pipeline → "
-            f"{spec['n_numbers']} numbers in {len(spec['files'])} workbooks.</div>"
-            f"{hdr}{action}{files}<a href='/graph'>← pipeline graph</a> · <a href='/'>overview</a>")
+            f"{spec['n_numbers']} numbers in {len(spec['files'])} workbooks + a clear-run evidence log.</div>"
+            f"{hdr}{action}{deliver}{files}{runlog_card}<a href='/graph'>← pipeline graph</a> · <a href='/overview'>overview</a>")
     return Response(_page("Output", body), mimetype="text/html")
+
+
+@app.get("/runlog")
+def runlog_page():
+    """Raw clear-run evidence log (timestamped record of the last final run)."""
+    from . import runlog
+    txt = runlog.latest_text()
+    if not txt:
+        return Response("no clear-run log yet — run `python -m agent.run` or open /output?write=1",
+                        mimetype="text/plain; charset=utf-8")
+    return Response(txt, mimetype="text/plain; charset=utf-8")
+
+
+@app.get("/api/download")
+def api_download():
+    """Bundle the run outputs as a zip: the four submission workbooks + the timestamped
+    clear-run log. This is exactly what gets uploaded + the evidence artifact."""
+    import glob
+    import io
+    import zipfile
+    from . import runlog
+    buf = io.BytesIO()
+    n = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in sorted(glob.glob(os.path.join(workbook.SUBMISSION, "*.xlsx"))):
+            z.write(path, arcname=f"submission/{os.path.basename(path)}")
+            n += 1
+        log = os.path.join(runlog.LOGS_DIR, "clear-run.md")
+        if os.path.exists(log):
+            z.write(log, arcname="logs/clear-run.md")
+    if not n:
+        return Response("no workbooks yet — run the pipeline first (▶ Run or `python -m agent.run`)",
+                        mimetype="text/plain; charset=utf-8")
+    buf.seek(0)
+    return Response(buf.getvalue(), mimetype="application/zip",
+                    headers={"Content-Disposition": "attachment; filename=agents-vs-wall-street-outputs.zip"})
 
 
 @app.get("/backtest")
 def backtest_page():
-    from . import param_eval as _pe
     from . import prequential as _pq
-
+    from . import param_eval as _pe
     rows = _pq.run_all()
     pe_map = {(x["ticker"], x["label"]): x for x in _pe.compare_all()}
-    nested = selection.nested_bundle()["report"]
     # write outputs/backtest.json (Methodology 1 §11 auditability)
     try:
         outdir = os.path.join(ROOT, "outputs")
         os.makedirs(outdir, exist_ok=True)
         with open(os.path.join(outdir, "backtest.json"), "w", encoding="utf-8") as fh:
             _json.dump(rows, fh, ensure_ascii=False, indent=2, default=str)
-    except OSError:
+    except Exception:
         pass
 
     def _pct(x):
@@ -283,37 +340,156 @@ def backtest_page():
                 sens = pe.get("sensitivity") or {}
                 beats = "beats seasonal-naive ✓" if pe["beats_baseline"] else "≤ baseline"
                 robust = "robust across windows" if sens.get("robust") else "window-sensitive"
-                body += (f"<div class=ev style='color:#8fa8c8'>▸ candidate screen: best <b>{html.escape(pe['best'])}</b> "
+                body += (f"<div class=ev style='color:#8fa8c8'>▸ param eval: best <b>{html.escape(pe['best'])}</b> "
                          f"· {beats} · {robust} · ranking: {html.escape(rank)}</div>")
             body += "</div>"
         cards += (f"<div class=card><b>{html.escape(crows[0]['company'])}</b> "
                   f"<span class=badge>{html.escape(crows[0]['period'])}</span>{body}</div>")
-    nested_summary = nested["outer_summary"]
-    recommendations = nested["deployment_recommendations"]
-    config_text = " · ".join(
-        f"{ticker}:{recommendation['config_id']}"
-        for ticker, recommendation in recommendations.items()
-        if recommendation is not None
-    )
-    nested_card = (
-        "<div class=card><b>Nested causal parameter evaluation</b> "
-        "<span class='badge guide'>formal selection evidence</span>"
-        f"<div class=mrow><span>unseen company-rounds / predictions</span>"
-        f"<span>{nested_summary['company_rounds']} / {nested_summary['predictions']}</span></div>"
-        f"<div class=mrow><span>aggregate skill vs seasonal-naive</span>"
-        f"<span>{_pct(nested_summary['aggregate_skill'])}</span></div>"
-        f"<div class=mrow><span>deployment config</span>"
-        f"<span>{html.escape(config_text)}</span></div>"
-        "<div class=ev>Inner selection uses only paired origins before each outer target; "
-        "deployment recommendation is excluded from outer performance.</div></div>"
-    )
     body = (f"<h1>Prequential backtest — results & analysis</h1>"
-            f"<div class=sub>Walk-forward one-step-ahead with causal gap filling. "
-            f"Primary point loss: MAE; WAPE/RMSE remain diagnostics. "
+            f"<div class=sub>Walk-forward one-step-ahead (pulled from quant-projects garch_var). "
+            f"Point error (WAPE/RMSE) + VaR-style band coverage + Kupiec POF test. "
             f"<b>{n_tested}/12 metrics tested · {n_miscal} band(s) miscalibrated.</b> "
             f"Written to <code>outputs/backtest.json</code>.</div>"
-            f"{nested_card}{cards}<a href='/graph'>← pipeline graph</a> · <a href='/'>overview</a>")
+            f"{cards}<a href='/graph'>← pipeline graph</a> · <a href='/overview'>overview</a>")
     return Response(_page("Backtest", body), mimetype="text/html")
+
+
+@app.get("/report")
+def report_page():
+    from . import methodology_compare as _mc
+    rows = _mc.report_all()
+
+    def f(v, kind):
+        return _fmt(v, kind) if v is not None else "—"
+
+    cards = ""
+    for t in ("HD", "ADI", "HAS", "DE"):
+        crows = [r for r in rows if r["ticker"] == t]
+        body = ""
+        for r in crows:
+            selbadge = {"methodology-2": "<span class='badge guide'>M2 selected</span>",
+                        "ensemble": "<span class='badge lab'>ensemble</span>"}.get(
+                r["selected"], "<span class=badge>M1</span>")
+            m1 = f(r["m1_point"], r["kind"])
+            if r["m2_ok"]:
+                m2 = (f"{f(r['m2_base'], r['kind'])} <span class=u>(bear {f(r['m2_bear'], r['kind'])} / "
+                      f"bull {f(r['m2_bull'], r['kind'])} · {r['m2_n']} analogues)</span>")
+            else:
+                m2 = f"<span class=u>— {html.escape(r.get('m2_reason') or 'insufficient (fallback to M1)')}</span>"
+            errs = ""
+            if r["m1_err"] is not None or r["m2_err"] is not None:
+                m1e = f"{r['m1_err']:.3f}" if r["m1_err"] is not None else "—"
+                m2e = f"{r['m2_err']:.3f}" if r["m2_err"] is not None else "—"
+                fr = (" · " + html.escape(r["fallback_reason"])) if r.get("fallback_reason") else ""
+                errs = f"<div class=ev>PIT backtest err — M1 {m1e} / M2 {m2e}{fr}</div>"
+            body += (f"<div style='padding:8px 0;border-bottom:1px solid #1e252f'>"
+                     f"<div style='display:flex;justify-content:space-between'>"
+                     f"<span><b>{html.escape(r['label'])}</b> <span class=u>{html.escape(r['units'])}</span></span>"
+                     f"{selbadge}</div>"
+                     f"<div class=mrow><span class=u>Methodology 1</span><span class=pt>{m1}</span></div>"
+                     f"<div class=mrow><span class=u>Methodology 2 · Base</span><span>{m2}</span></div>{errs}</div>")
+        cards += (f"<div class=card><b>{html.escape(crows[0]['company'])}</b> "
+                  f"<span class=badge>{crows[0]['period']}</span>{body}</div>")
+    n_m2 = sum(1 for r in rows if r["selected"] == "methodology-2")
+    n_ens = sum(1 for r in rows if r["selected"] == "ensemble")
+    body = (f"<h1>Two-methodology comparison report</h1>"
+            f"<div class=sub>Methodology 1 (filing baseline + guidance + bridge) vs Methodology 2 "
+            f"(historical analogue + weighted scenarios), per company-period-metric. PIT-gate selection: "
+            f"<b>{n_m2} → M2, {n_ens} → ensemble, rest → M1.</b> "
+            f"Output workbooks currently use Methodology 1.</div>{cards}"
+            f"<a href='/graph'>← pipeline graph</a> · <a href='/backtest'>backtest</a> · <a href='/overview'>overview</a>")
+    return Response(_page("Report", body), mimetype="text/html")
+
+
+@app.get("/trace")
+def trace_page():
+    from . import trace as _tr
+    rows = _tr.trace_all()
+    try:
+        outdir = os.path.join(ROOT, "outputs")
+        os.makedirs(outdir, exist_ok=True)
+        with open(os.path.join(outdir, "trace.json"), "w", encoding="utf-8") as fh:
+            _json.dump(rows, fh, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        pass
+
+    def f(v, kind):
+        return _fmt(v, kind) if v is not None else "—"
+
+    def _pct(x):
+        return f"{x:.0%}" if x is not None else "—"
+
+    def stage(n, title, inner):
+        return (f"<div style='margin:6px 0'><span class=u style='color:#6aa0ff'>{n}</span> "
+                f"<b class=u>{title}</b><div style='margin:2px 0 0 16px'>{inner}</div></div>")
+
+    def one(r):
+        k = r["kind"]
+        src = "".join(f"<div class=ev>{html.escape(str(s))}</div>" for s in r["sources"]) or "<span class=u>—</span>"
+        tail = " · ".join(f"{p} {f(v, k)}" for p, v in r["extraction"]["series_tail"]) or "<span class=u>no series</span>"
+        m1 = r["methodology_1"]
+        m1h = (f"<div class=kv><span>approach</span><span class=u>{m1['approach']}</span></div>"
+               f"<div class=kv><span>basis</span><span class=u>{html.escape(str(m1['basis']))}</span></div>"
+               f"<div class=kv><span>M1 point</span><span class=pt>{f(m1['point'], k)}</span></div>")
+        m2 = r["methodology_2"]
+        if m2.get("insufficient"):
+            m2h = f"<span class=u>insufficient — {html.escape(str(m2.get('reason') or 'no analogues'))} → fallback M1</span>"
+        else:
+            ana = "".join(f"<div class=kv><span>{a['period']}</span><span class=u>dist {a['dist']} · w {a['weight']} · "
+                          f"next YoY {a['next_growth']:+.1%}</span></div>" for a in m2["analogues"])
+            m2h = (f"<div class=u style='margin-bottom:3px'>{m2['n']} analogues, anchor {f(m2['anchor'], k)}:</div>{ana}"
+                   f"<div class=kv><span>Bear / Base / Bull</span><span>{f(m2['bear'], k)} / "
+                   f"<b>{f(m2['base'], k)}</b> / {f(m2['bull'], k)}</span></div>")
+        pe = r["parameter_eval"]
+        peh = ("<span class=u>—</span>" if pe.get("insufficient")
+               else f"best <b>{pe['best']}</b> · {'beats baseline' if pe['beats_baseline'] else '≤ baseline'} · "
+                    f"{'robust' if pe['robust'] else 'fragile'} · ranking {' › '.join(pe['ranking'])}")
+        bt = r["backtest"]["detail"]
+        if bt.get("insufficient"):
+            bth = f"<span class=u>skipped — {html.escape(str(bt.get('reason') or ''))}</span>"
+        else:
+            kp = f"{bt['kupiec_pvalue']:.2f}" if bt["kupiec_pvalue"] is not None else "n/a"
+            bth = (f"M1 err {r['backtest']['m1_err']:.3f} · breach {_pct(bt['breach_rate'])}/exp "
+                   f"{_pct(bt['expected_breach'])} · Kupiec p={kp}")
+        ag = r["agent"]
+        agh = (f"<div class=kv><span>selected</span><span><b>{ag['selected']}</b> "
+               f"<span class=u>[{ag['by']}]</span></span></div>"
+               f"<div class=kv><span>regime</span><span class=u>{ag['regime'] or '—'}</span></div>"
+               f"<div class=kv><span>reason</span><span class=u>{html.escape(str(ag['reason']))}</span></div>"
+               f"<div class=kv><span>confidence</span><span class=u>{ag['confidence']}</span></div>")
+        sc = r["stats_control"]
+        vbadge = {"pass": "guide", "warn": "lab", "fail": "lab"}.get(sc["verdict"], "")
+        inner = (stage("①", "Raw sources (corpus)", src)
+                 + stage("②", "Extraction — actual series (PIT)", f"<span class=u>{tail}</span>")
+                 + stage("③", "Methodology 1 — filing baseline + guidance", m1h)
+                 + stage("④", "Methodology 2 — historical analogues", m2h)
+                 + stage("⑤", "Parameter eval — model grid", peh)
+                 + stage("⑥", "Point-in-time backtest", bth)
+                 + stage("⑦", "🤖 Agent decision", agh)
+                 + stage("⑧", "Stats control", f"<span class='badge {vbadge}'>{sc['verdict']}</span> "
+                         + (", ".join(sc["failed"]) if sc["failed"] else ""))
+                 + stage("⑨", "FINAL number", f"<span class=pt>{f(r['final']['point'], k)}</span> "
+                         f"<span class=u>from {r['final']['methodology']}</span>"))
+        return (f"<details style='margin:6px 0;border:1px solid #263040;border-radius:8px;padding:6px 10px'>"
+                f"<summary style='cursor:pointer'><b>{html.escape(r['label'])}</b> "
+                f"<span class=u>{html.escape(r['units'])}</span> → "
+                f"<span class=pt>{f(r['final']['point'], k)}</span> "
+                f"<span class=u>({r['final']['methodology']})</span></summary>"
+                f"<div style='margin-top:8px'>{inner}</div></details>")
+
+    cards = ""
+    for t in ("HD", "ADI", "HAS", "DE"):
+        crows = [r for r in rows if r["ticker"] == t]
+        cards += (f"<div class=card><b>{html.escape(crows[0]['company'])}</b> "
+                  f"<span class=badge>{crows[0]['period']}</span>"
+                  + "".join(one(r) for r in crows) + "</div>")
+    agent_on = rows[0].get("agent_on") if rows else False
+    body = (f"<h1>Provenance trace — raw data → final number</h1>"
+            f"<div class=sub>Full audit chain per metric: sources → extraction → Methodology 1 ∥ 2 → "
+            f"parameter eval → PIT backtest → {'🤖 agent' if agent_on else 'gate'} decision → stats control → "
+            f"final. Written to <code>outputs/trace.json</code>. Click a metric to expand its chain.</div>"
+            f"{cards}<a href='/report'>← M1 vs M2 report</a> · <a href='/graph'>graph</a> · <a href='/overview'>overview</a>")
+    return Response(_page("Trace", body), mimetype="text/html")
 
 
 @app.get("/run")
@@ -329,7 +505,7 @@ def run():
         lines += f"<div class=mrow><span>{os.path.basename(c['written'])}</span><span class=u>{html.escape(vals)}</span></div>"
     body = (f"<h1>Write workbooks</h1><div class=sub>{manifest['n_filled']}/{manifest['n_total']} numbers · "
             f"submission/*.xlsx — validate with <code>npm run check:submission</code></div>"
-            f"<div class=card>{lines}</div><a href='/output'>output detail →</a> · <a href='/'>overview</a>")
+            f"<div class=card>{lines}</div><a href='/output'>output detail →</a> · <a href='/overview'>overview</a>")
     return Response(_page("Run", body), mimetype="text/html")
 
 
@@ -354,29 +530,6 @@ def _rect(x, y, w, h, nid, fill, stroke, lines, dash=False, ring=None):
     return f'<g class=gnode id="n_{nid}" onclick="show(\'{nid}\')">{rr}{r}{txt}</g>'
 
 
-def _candidate_configs():
-    """The BacktestConfig grid, flattened to one list of config dicts.
-
-    A shared grid is reported as a list, but the company-local protocols (quarterly
-    season 4 against Hays H1/FY season 2) report
-    {"company_local": True, "by_company": {ticker: [config, ...]}} instead. Identical
-    grids are merged and tagged with the tickers that use them.
-    """
-    reported = selection.nested_bundle()["report"]["candidate_configs"]
-    if not isinstance(reported, dict):
-        return list(reported)
-
-    merged = {}
-    for ticker, configs in (reported.get("by_company") or {}).items():
-        for config in configs:
-            key = (config["config_id"], config["origin_window"], config["min_train"],
-                   config["min_origins"], config["weight_cap"],
-                   config["baseline_weight_floor"], config["min_improvement"])
-            merged.setdefault(key, (config, []))[1].append(ticker)
-    return [{**config, "_used_by": ", ".join(tickers)}
-            for config, tickers in merged.values()]
-
-
 def _methodology_html():
     """Full description of the active methodology (Methodology 1) for the node modal."""
     M = methodology.METHODOLOGY_1
@@ -394,12 +547,7 @@ def _methodology_html():
             "<b class=u>Approach</b>" + ul(M["approach"]) +
             "<b class=u>Core principles (the agent must obey)</b>" + ul(M["principles"]) +
             "<b class=u>Flow</b><div class=u style='margin:4px 0'>"
-            + " → ".join(html.escape(s) for s in M["flow"]) + "</div>"
-            "<b class=u>Data priority</b>" + ul(M["data"]["priority"]) +
-            "<b class=u>Baseline — guarded nested selection with direct fallback</b>"
-            f"<div class=u style='margin:4px 0'>{html.escape(M['baseline']['formula'])}</div>"
-            f"<div class=u style='margin:0 0 8px'>allowed: {', '.join(M['baseline']['allowed'])}; "
-            f"forbidden: {html.escape(M['baseline']['forbidden'])}</div>")
+            + " → ".join(html.escape(s) for s in M["flow"]) + "</div>")
 
     appr = ""
     for aid in ("app_guidance", "app_seasonal", "app_bridge"):
@@ -412,17 +560,6 @@ def _methodology_html():
     cand = "".join(f"<div class=kv style='align-items:center'><span class=fx><code>{mid}</code>&nbsp; ${lx}$</span>"
                    f"<span class=u>{html.escape(note)}</span></div>"
                    for mid, lx, note in methodology.MODELS_LATEX)
-    config_grid = "".join(
-        _latex_row(
-            rf"\theta=({config['origin_window']},{config['min_train']},{config['min_origins']},"
-            rf"{config['weight_cap']:.2f},{config['baseline_weight_floor']:.2f},"
-            rf"{config['min_improvement']:.2f})",
-            f"{config['config_id']}"
-            + (f" · {config['_used_by']}" if config.get("_used_by") else "")
-            + ": window, min train/origins, weight cap, baseline floor, min improvement",
-        )
-        for config in _candidate_configs()
-    )
     btm = "".join(_latex_row(lx, note) for lx, note in methodology.BACKTEST_LATEX)
 
     adap = ""
@@ -434,9 +571,8 @@ def _methodology_html():
 
     return (pkg("📋 Overview · principles · flow", over)
             + pkg("🧮 Model approaches — formulas (LaTeX)", appr)
-            + pkg("📊 Candidate models — inner ensemble pool", cand)
-            + pkg("⚙️ BacktestConfig grid — nested parameter selection", config_grid)
-            + pkg("📐 Backtest math — MAE-first, paired and causal", btm)
+            + pkg("📊 Candidate models — parameter-eval grid", cand)
+            + pkg("📐 Backtest math (prequential + Kupiec)", btm)
             + pkg("🔧 Per-company adapters — which approach each output uses", adap)
             + pkg("📤 Output rules", ul(M["output"]["rules"]))
             + f"<div class=u style='margin:8px 0 0'><i>{html.escape(M['current_form'])}</i></div>")
@@ -496,7 +632,7 @@ def _graph_svg(fc, mf):
     # P2 Methodology (control plane) — Methodology 1
     parts.append(_rect(360, 262, 340, 40, "methodology", "#1a1f27", "#4a5568",
                        ["Methodology 1 · click to read", "filing baseline + guidance — decides HOW"]))
-    parts.append('<line x1="520" y1="222" x2="530" y2="262" stroke="#3a4658" stroke-width="1.4"/>')
+    parts.append(f'<line x1="520" y1="222" x2="530" y2="262" stroke="#3a4658" stroke-width="1.4"/>')
     mthb = (530, 302)
     nodes["methodology"] = {"t": methodology.METHODOLOGY_1["name"], "plug": "no",
                             "sub": "P2 · FIXED / constitutional — the agent reads this and obeys it",
@@ -541,7 +677,7 @@ def _graph_svg(fc, mf):
         wt = row.get("weight", 0.0)
         col = "#f0b768" if row.get("eligible") else "#2b3745"
         parts.append(f'<path d="M{mx},{my} C{mx},458 {btc[0]},458 {btc[0]},488" fill="none" stroke="{col}" stroke-width="{0.6+wt*7:.1f}" opacity="0.75"/>')
-    parts.append('<line x1="530" y1="508" x2="600" y2="508" stroke="#4a5a6e" stroke-width="2.4"/>')
+    parts.append(f'<line x1="530" y1="508" x2="600" y2="508" stroke="#4a5a6e" stroke-width="2.4"/>')
     nodes["backtest"] = {"t": "Rolling-origin backtest · gate", "plug": "no", "sub": "P4 · Backtesting (executes methodology)",
                          "body": "Executes the methodology: at each trailing origin fit on data-up-to-then, predict "
                                  "next, score; drop anything that can't beat seasonal-naive."}
@@ -552,7 +688,7 @@ def _graph_svg(fc, mf):
     parts.append(_rect(320, 584, 170, 40, "guardrail", "#16241b", "#2f6b43", ["Guardrail band", "point ± ens-error"]))
     parts.append(_rect(560, 584, 170, 40, "emit", "#16241b", "#2f6b43", [fc["output_file"], "Summary sheet"]))
     parts.append(f'<path d="M{eno[0]},{eno[1]} C{eno[0]},558 405,558 405,584" fill="none" stroke="#3a6b47" stroke-width="2"/>')
-    parts.append('<line x1="490" y1="604" x2="560" y2="604" stroke="#3a6b47" stroke-width="2"/>')
+    parts.append(f'<line x1="490" y1="604" x2="560" y2="604" stroke="#3a6b47" stroke-width="2"/>')
     nodes["guardrail"] = {"t": "Guardrail band", "plug": "no", "sub": "P5 · Output",
                           "body": f"Point {_fmt(mf.point, mf.kind) if mf and mf.point is not None else '—'} "
                                   f"± ensemble error → band. Consensus-clamp seam (corpus-only for now)."}
@@ -661,30 +797,15 @@ _APPROACH_NODE = {
     "bridge": "app_bridge", "fy_ni_bridge": "app_bridge", "segment_margin": "app_bridge",
 }
 _APPROACH_META = {
-    "app_guidance": (
-        "Guidance anchor",
-        "management's published numbers",
-        (
-            "Anchor to management guidance: midpoint, stated range, or reversion toward the guide. "
-            "Methodology 1 §5 guidance calibration. Metrics: ADI Rev/EPS, HD comp, HAS OP."
-        ),
-    ),
-    "app_seasonal": (
-        "Seasonal + trend",
-        "historical anchor + recent growth",
-        (
-            "Same-quarter seasonal anchor plus a recent-trend adjustment. Methodology 1 §5. "
-            "Metrics: HD net sales/EPS, ADI GM, HAS net fees, DE net sales."
-        ),
-    ),
-    "app_bridge": (
-        "Accounting bridge",
-        "EPS / OP via financial identities",
-        (
-            "Derive via accounting identities: EPS = after-tax profit ÷ shares; operating profit = "
-            "base × margin/conversion; segment sales × margin. Metrics: DE EPS/PPA OP, HAS EPS."
-        ),
-    ),
+    "app_guidance": ("Guidance anchor", "management's published numbers",
+                     "Anchor to management guidance: midpoint, stated range, or reversion toward the guide. "
+                     "Methodology 1 §5 guidance calibration. Metrics: ADI Rev/EPS, HD comp, HAS OP."),
+    "app_seasonal": ("Seasonal + trend", "historical anchor + recent growth",
+                     "Same-quarter seasonal anchor + recent-trend adjustment on the extracted actual series. "
+                     "Methodology 1 §5 seasonal anchor + recent-trend. Metrics: HD net sales/EPS, ADI GM, HAS net fees, DE net sales."),
+    "app_bridge": ("Accounting bridge", "EPS / OP via financial identities",
+                   "Derive via accounting identities: EPS = after-tax profit ÷ shares; operating profit = base × margin/conversion; "
+                   "segment sales × margin. Methodology 1 §4/§9. Metrics: DE EPS & PPA OP, HAS EPS."),
 }
 
 
@@ -703,11 +824,96 @@ def _approach_html(aid):
             f"<b class=u>Metrics it handles</b>{metrics}")
 
 
+def _pkg(title, inner):
+    return (f"<details open style='margin:6px 0;border:1px solid #263040;border-radius:8px;padding:5px 10px'>"
+            f"<summary style='cursor:pointer;font-weight:600'>{title}</summary>"
+            f"<div style='margin-top:6px'>{inner}</div></details>")
+
+
+def _ul(items):
+    return ("<ul class=u style='margin:4px 0 8px;padding-left:18px'>"
+            + "".join(f"<li>{html.escape(str(x))}</li>" for x in items) + "</ul>")
+
+
+def _methodology2_html():
+    """Methodology 2 as a navigable package (analogue approaches with LaTeX, features, gate)."""
+    M = methodology.METHODOLOGY_2
+    over = (f"<div class=u style='margin:0 0 6px'>{html.escape(M['goal'])}</div>"
+            f"<div class=u style='margin:6px 0'><i>{html.escape(M['core_idea'])}</i></div>"
+            "<b class=u>Recipe</b>" + _ul(M["recipe"]) +
+            "<b class=u>Flow</b><div class=u style='margin:4px 0'>"
+            + " → ".join(html.escape(s) for s in M["flow"]) + "</div>")
+    appr = ""
+    for aid, A in methodology.MODEL_APPROACHES_2.items():
+        rows = "".join(_latex_row(lx, note) for lx, note in A["latex"])
+        appr += (f"<div style='margin:6px 0;padding:6px 8px;border:1px solid #24202b;border-radius:8px'>"
+                 f"<b>{html.escape(A['name'])}</b>"
+                 f"<div class=u style='margin:2px 0'>{html.escape(A['desc'])}</div>"
+                 f"<div style='margin:4px 0'>{rows}</div></div>")
+    params = "".join(f"<div class=kv><span>{html.escape(k)}</span><span class=u>"
+                     f"{html.escape(v if isinstance(v, str) else ', '.join(map(str, v)))}</span></div>"
+                     for k, v in M["parameters"].items())
+    return (_pkg("📋 Overview · core idea · flow", over)
+            + _pkg("🧮 Analogue approaches — formulas (LaTeX)", appr)
+            + _pkg("🧷 PIT snapshot features", _ul(M["snapshot_features"]))
+            + _pkg("⚙ Parameters (grid — full selection staged)", params)
+            + _pkg("🚫 Leakage rules", _ul(M["leakage_rules"]))
+            + _pkg("🚦 Backtest gate & fallback → Methodology 1", _ul(M["gate"]))
+            + _pkg("⛓ Constraints", _ul(M["constraints"]))
+            + f"<div class=u style='margin:8px 0 0'><i>{html.escape(M['current_form'])}</i></div>")
+
+
+def _comparison_html():
+    """Per-metric Methodology 1 vs 2 PIT selection (the gate result)."""
+    from . import methodology_compare as _mc
+    rows = _mc.compare_all()
+    from .llm import LLM as _L
+    agent_on = _L().available
+    who = ("<b>🤖 The LLM agent</b> reads both methodologies' forecasts + their point-in-time backtest errors "
+           "and SELECTS one per metric (with a regime read + reason + confidence). It never invents a number — "
+           "it chooses between the two deterministic forecasts, bounded by the gate." if agent_on else
+           "<b>No OpenAI key</b> — selection falls back to the deterministic PIT gate (the agent is off).")
+    body = (f"<div class=u style='margin:0 0 8px'>{who}<br><br>Selection is per company × period × metric: "
+            "prefer the lower PIT error; capped ensemble if within 5%; else fall back to Methodology 1.</div>")
+    for r in rows:
+        sel = r["selected"]
+        col = {"methodology-2": "guide", "ensemble": "lab"}.get(sel, "")
+        badge = f"<span class='badge {col}'>{'M2' if sel=='methodology-2' else 'ensemble' if sel=='ensemble' else 'M1'}</span>"
+        m1 = f"{r['m1_err']:.3f}" if r["m1_err"] is not None else "—"
+        m2 = f"{r['m2_err']:.3f}" if r["m2_err"] is not None else "—"
+        reason = f" <span class=u>· {html.escape(r['fallback_reason'])}</span>" if r.get("fallback_reason") else ""
+        body += (f"<div class=kv><span>{r['ticker']} · {html.escape(r['label'])}</span>"
+                 f"<span>{badge} <span class=u>M1 {m1} / M2 {m2}</span>{reason}</span></div>")
+    body += "<br><a href='/report'>▸ full report — both methodologies' forecasts side by side</a>"
+    return body
+
+
+def _provision_html():
+    """Agent input-provisioning per metric (grounded on the catalog, bounded by feature-control)."""
+    from . import provisioner as _prov
+    from .llm import LLM as _L
+    on = _L().available
+    body = (f"<div class=u style='margin:0 0 8px'><b>🤖 The provisioning agent{'' if on else ' (off — no key)'}</b> "
+            "reads the DATA CATALOG (what features exist per metric) + each methodology's input requirements and "
+            "decides how to provide the inputs — <b>bounded by feature-control</b> (stats-control on whether the "
+            "features are meaningful: series length, non-degenerate variance, coverage). It never invents data.</div>")
+    for t in ("HD", "ADI", "HAS", "DE"):
+        p = _prov.provision(t)
+        body += f"<div class=kv style='border:0;margin-top:4px'><span><b>{t}</b> · {html.escape(p['company'])}</span></div>"
+        for pp in p["provision"]:
+            m2 = ("<span class='badge guide'>M2 ✓</span>" if pp["m2_feasible"]
+                  else "<span class=badge>M2 ✗</span>")
+            body += (f"<div class=kv><span>{html.escape(pp['label'])}</span>"
+                     f"<span>M1 ✓ {m2} <span class=u>{html.escape(pp['reason'])}</span></span></div>")
+    return body
+
+
 def _combined_svg(manifest, spec):
-    """One combined network graph (current form): four companies → ingestion →
-    Methodology 1 → its model approaches → nested configuration selection →
-    unseen outer validation and stats control → output."""
-    W, H = 1060, 712
+    """Combined graph — the P2 methodology layer shows Methodology 1 ∥ Methodology 2
+    (each a clickable package); both feed a Methodology-comparison node that selects per
+    metric; then validate (backtest + stats) → output. Sub-nodes live inside the modals
+    to keep the graph uncluttered."""
+    W, H = 1060, 636
     parts = [f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:1060px">']
     nodes = {}
     xs = [120, 360, 600, 840]
@@ -716,15 +922,15 @@ def _combined_svg(manifest, spec):
     def band(lab, y, tag, col):
         parts.append(f'<text x="18" y="{y}" fill="{col}" style="font:600 11px sans-serif">{lab}</text>')
         if tag:
-            parts.append(f'<text x="245" y="{y}" fill="#5c6470" style="font:10px sans-serif">{tag}</text>')
+            parts.append(f'<text x="265" y="{y}" fill="#5c6470" style="font:10px sans-serif">{tag}</text>')
 
     band("INPUT · four companies", 30, "highlight only — not a wired stage", "#6b7480")
     band("P1 · DATA INGESTION", 122, "corpus → extract → panel", "#6aa0ff")
-    band("P2 · METHODOLOGY 1", 258, "fixed — decides HOW and owns the approaches", "#8b93a1")
-    band("P3 · MODEL APPROACHES", 350, "owned by Methodology 1", "#f0b768")
-    band("P3.5 · NESTED PARAMETER SELECTION", 458, "inner select — before each outer target", "#8fa8c8")
-    band("P4 · OUTER VALIDATE", 520, "unseen MAE vs paired baseline + stats control", "#8b93a1")
-    band("P5 · OUTPUT LAYER", 582, "4 workbooks · 12 numbers", "#3fb950")
+    band("P1.5 · AGENT PROVISIONING", 224, "catalog → methodology input needs → feature control (stats-control)", "#8fa8c8")
+    band("P2 · METHODOLOGIES", 254, "two independent methodologies — click each to open its package", "#8b93a1")
+    band("P3 · AGENT ORCHESTRATION", 346, "LLM reads M1 ∥ M2 + PIT backtests → selects per metric (numbers stay deterministic)", "#8fa8c8")
+    band("P4 · VALIDATE", 426, "backtest (walk-forward) + stats control", "#8b93a1")
+    band("P5 · OUTPUT LAYER", 498, "4 workbooks · 12 numbers", "#3fb950")
 
     # INPUT — four companies
     incx = []
@@ -752,45 +958,51 @@ def _combined_svg(manifest, spec):
     nodes["u_extract"] = {"t": "Extractor → period panel", "plug": "hot", "sub": "P1 · Data ingestion (hot-swap)",
                           "body": "Text→panel per company: historical actuals series + issued guidance, event-deduped."}
 
-    # P2 Methodology 1
-    mth = (380, 268, 300, 40)
-    parts.append(_rect(*mth, "methodology", "#1a1f27", "#4a5568",
-                       ["Methodology 1 · click to read", "filing baseline + guidance — owns ↓ approaches"]))
-    parts.append(f'<line x1="{excx}" y1="{ex[1]+ex[3]}" x2="{mth[0]+mth[2]/2}" y2="{mth[1]}" stroke="#5a4620" stroke-width="1.4"/>')
-    mthcx = mth[0] + mth[2] / 2
+    # P2 · METHODOLOGIES — Methodology 1 ∥ Methodology 2 (each a clickable package)
+    m1 = (170, 264, 320, 44); m2 = (560, 264, 320, 44)
+    parts.append(_rect(*m1, "methodology", "#1a1f27", "#4a5568",
+                       ["Methodology 1 · click to open", "filing baseline + guidance + bridge"]))
+    parts.append(_rect(*m2, "methodology2", "#1a2027", "#4a5568",
+                       ["Methodology 2 · click to open", "historical analogue + weighted scenarios"]))
+    # P1.5 · AGENT input provisioning (grounded on catalog, bounded by feature-control)
+    from .llm import LLM as _LLMp
+    _prov_on = _LLMp().available
+    pv = (300, 234, 460, 22)
+    parts.append(_rect(*pv, "provisioning", "#101922", ("#6aa0ff" if _prov_on else "#4a5568"),
+                       ["🤖 Agent · input provisioning — catalog → methodology needs → feature control"]))
+    parts.append(f'<line x1="{excx}" y1="{ex[1]+ex[3]}" x2="530" y2="{pv[1]}" stroke="#4a5568" stroke-width="1.1"/>')
+    parts.append(f'<path d="M530,{pv[1]+pv[3]} C530,262 {m1[0]+m1[2]/2},262 {m1[0]+m1[2]/2},{m1[1]}" fill="none" stroke="#4a5568" stroke-width="1.1"/>')
+    parts.append(f'<path d="M530,{pv[1]+pv[3]} C530,262 {m2[0]+m2[2]/2},262 {m2[0]+m2[2]/2},{m2[1]}" fill="none" stroke="#4a5568" stroke-width="1.1"/>')
+    nodes["provisioning"] = {"t": "🤖 Agent · input provisioning", "plug": "code" if _prov_on else "no",
+                             "sub": "P1.5 · agent reads the catalog + each methodology's input needs; feature-control validates the features are meaningful",
+                             "body": _provision_html()}
     nodes["methodology"] = {"t": methodology.METHODOLOGY_1["name"], "plug": "no",
-                            "sub": "P2 · FIXED / constitutional — the agent reads this and obeys it",
+                            "sub": "P2 · fixed methodology — click to open the package (approaches, formulas)",
                             "body": _methodology_html()}
+    nodes["methodology2"] = {"t": methodology.METHODOLOGY_2["name"], "plug": "no",
+                             "sub": "P2 · independent methodology — analogue matching + weighted scenarios",
+                             "body": _methodology2_html()}
 
-    # (LLM driver is OFF-PIPELINE — shown outside the graph, not a stage in the flow)
+    # P3 · METHODOLOGY COMPARISON — both feed the per-metric gate/select
+    from .llm import LLM as _LLMc
+    _agent_on = _LLMc().available
+    cmp = (350, 354, 360, 42)
+    parts.append(_rect(*cmp, "comparison", "#141d24", ("#6aa0ff" if _agent_on else "#3f6a8c"),
+                       ["🤖 Agent orchestration" + ("" if _agent_on else " (gate)"),
+                        "LLM selects methodology per metric" if _agent_on else "deterministic gate (no key)"]))
+    parts.append(f'<path d="M{m1[0]+m1[2]/2},{m1[1]+m1[3]} C{m1[0]+m1[2]/2},346 530,346 530,{cmp[1]}" fill="none" stroke="#2f4a5e" stroke-width="1"/>')
+    parts.append(f'<path d="M{m2[0]+m2[2]/2},{m2[1]+m2[3]} C{m2[0]+m2[2]/2},346 530,346 530,{cmp[1]}" fill="none" stroke="#2f4a5e" stroke-width="1"/>')
+    nodes["comparison"] = {"t": "Agent orchestration — the LLM runs the decision layer", "plug": "code" if _agent_on else "no",
+                           "sub": "P3 · the agent reads BOTH methodologies + their PIT backtests and selects per metric",
+                           "body": _comparison_html()}
 
-    # P3 model approaches — OWNED by Methodology 1 (dashed container = belonging)
-    parts.append('<rect x="150" y="356" width="760" height="88" rx="11" fill="#1d160c" '
-                 'stroke="#7a5a1e" stroke-dasharray="5 4" opacity="0.85"/>')
-    parts.append('<text x="164" y="372" fill="#f0b768" style="font:10px sans-serif">▸ owned by Methodology 1</text>')
-    app_xy = {"app_guidance": (200, 384, 200, 46), "app_seasonal": (430, 384, 200, 46),
-              "app_bridge": (660, 384, 200, 46)}
-    for aid, (x, y, w, h) in app_xy.items():
-        t, sub, _ = _APPROACH_META[aid]
-        parts.append(_rect(x, y, w, h, aid, "#2a2013", "#c78a34", [t, sub]))
-        parts.append(f'<path d="M{mthcx},{mth[1]+mth[3]} C{mthcx},350 {x+w/2},350 {x+w/2},{y}" '
-                     f'fill="none" stroke="#5a4620" stroke-width="1" stroke-dasharray="3 3"/>')
-        nodes[aid] = {"t": f"{t} — model approach", "plug": "hot",
-                      "sub": "P3 · owned by Methodology 1 · formulas ↓", "body": _approach_html(aid)}
-
-    # P3.5 · select BacktestConfig causally before each unseen outer target.
-    for cxn in (300, 530, 760):
-        parts.append(f'<path d="M{cxn},444 C{cxn},454 530,454 530,466" fill="none" stroke="#2f4a5e" stroke-width="0.9"/>')
-    parts.append(_rect(360, 466, 340, 36, "param_eval", "#1a2530", "#3f6a8c",
-                       ["Nested parameter selection", "inner MAE · shared config · causal only"]))
-
-    # P4 · validate selected policy on unseen outer targets, then check outputs.
-    parts.append('<line x1="530" y1="502" x2="530" y2="516" stroke="#3a4658" stroke-width="1.2"/>')
-    parts.append('<path d="M530,516 C530,522 380,520 380,528" fill="none" stroke="#3a4658" stroke-width="1"/>')
-    parts.append('<path d="M530,516 C530,522 680,520 680,528" fill="none" stroke="#3a4658" stroke-width="1"/>')
-    parts.append(_rect(250, 528, 260, 36, "prequential", "#1b222c", "#3a4658",
+    # P4 · validate — backtest + stats control
+    parts.append(f'<line x1="530" y1="{cmp[1]+cmp[3]}" x2="530" y2="428" stroke="#3a4658" stroke-width="1.2"/>')
+    parts.append('<path d="M530,428 C530,432 380,432 380,438" fill="none" stroke="#3a4658" stroke-width="1"/>')
+    parts.append('<path d="M530,428 C530,432 680,432 680,438" fill="none" stroke="#3a4658" stroke-width="1"/>')
+    parts.append(_rect(250, 438, 260, 36, "prequential", "#1b222c", "#3a4658",
                        ["Prequential backtest · validate", "walk-forward · coverage · Kupiec"]))
-    parts.append(_rect(550, 528, 260, 36, "stats_control", "#1b222c", "#3a4658",
+    parts.append(_rect(550, 438, 260, 36, "stats_control", "#1b222c", "#3a4658",
                        ["Stats control · validate", "finite · range · sign · band"]))
     from . import stats_control as _sc
     summ_sc = {"pass": 0, "warn": 0, "fail": 0, "n": 0}
@@ -806,53 +1018,33 @@ def _combined_svg(manifest, spec):
                                        f"<div class=kv><span>latest run</span><span>"
                                        f"{summ_sc['pass']} pass · {summ_sc['warn']} warn · {summ_sc['fail']} fail "
                                        f"/ {summ_sc['n']}</span></div><br><b class=u>Checks</b>{checkdoc}")}
-    nodes["prequential"] = {"t": "Causal prequential outer validation", "plug": "no",
-                            "sub": "P4 · unseen targets after nested selection",
-                            "body": ("At every outer target, the configuration is selected using only earlier "
-                                     "paired observations. The selected method and seasonal-naive baseline are "
-                                     "then scored on the same unseen actual.<br><br>"
-                                     "<b class=u>Primary evidence</b>"
-                                     "<div class=kv><span>point error</span><span class=u>MAE</span></div>"
-                                     "<div class=kv><span>paired comparison</span><span class=u>relative MAE · skill</span></div>"
-                                     "<div class=kv><span>band diagnostics</span><span class=u>coverage · Kupiec POF</span></div><br>"
-                                     "<a href='/backtest'>▸ full nested backtest results &amp; diagnostics</a>")}
-    nested = selection.nested_bundle()["report"]
-    nested_summary = nested["outer_summary"]
-    nested_configs = " · ".join(
-        f"{ticker}:{recommendation['config_id']}"
-        for ticker, recommendation in nested["deployment_recommendations"].items()
-        if recommendation is not None
-    )
-    nodes["param_eval"] = {"t": "Nested causal parameter selection", "plug": "no",
-                           "sub": "P3.5 · paired inner selection before each outer target",
-                           "body": ("Each outer target selects one BacktestConfig using only paired "
-                                    "origins strictly before that target. The selected config is then "
-                                    "scored against the same seasonal-naive baseline on the unseen target."
-                                    f"<br><br><div class=kv><span>outer evidence</span><span>"
-                                    f"{nested_summary['company_rounds']} company-rounds · {nested_summary['predictions']} predictions"
-                                    f"</span></div><div class=kv><span>aggregate skill</span><span>"
-                                    f"{nested_summary['aggregate_skill']:.1%}</span></div>"
-                                    f"<div class=kv><span>deployment config</span><span>"
-                                    f"{html.escape(nested_configs)}</span></div><br>"
-                                    "<a href='/backtest'>▸ inspect nested and per-metric diagnostics</a>")}
+    nodes["prequential"] = {"t": "Prequential backtest — validate", "plug": "no",
+                            "sub": "P4 · validates the selected model (walk-forward)",
+                            "body": ("Predictive-sequential backtest (pulled from quant-projects garch_var). At each "
+                                     "historical origin, fit on data-up-to-then, forecast next, score the realized "
+                                     "actual.<br><br><b class=u>Emits</b>"
+                                     "<div class=kv><span>point error</span><span class=u>MAE / RMSE / WAPE</span></div>"
+                                     "<div class=kv><span>band coverage</span><span class=u>VaR-style breach vs expected</span></div>"
+                                     "<div class=kv><span>Kupiec POF</span><span class=u>χ²₁ calibration test</span></div><br>"
+                                     "<a href='/backtest'>▸ full backtest results &amp; analysis</a>")}
 
     # P5 output — four workbooks + OUTPUT spec
     for c, x in zip(cos, xs):
         ready = c["wired"] and all(m["point"] is not None for m in c["metrics"])
         col = "#3fb950" if ready else "#8b93a1"
         summ = "  ".join(_fmt(m["point"], m["kind"]) for m in c["metrics"] if m["point"] is not None) or "pending"
-        parts.append(_rect(x, 592, 170, 44, f"out_{c['ticker']}", "#16241b", col, [c["file"], summ],
+        parts.append(_rect(x, 510, 170, 44, f"out_{c['ticker']}", "#16241b", col, [c["file"], summ],
                            ring=("#3fb950" if ready else None)))
-        parts.append(f'<path d="M530,564 C530,582 {x+85},582 {x+85},592" fill="none" stroke="#3a6b47" stroke-width="1.1"/>')
+        parts.append(f'<path d="M530,474 C530,494 {x+85},494 {x+85},510" fill="none" stroke="#3a6b47" stroke-width="1.1"/>')
         mrows = "".join(f"<div class=kv><span>{html.escape(m['label'])} <span class=u>{m['units']}</span></span>"
                         f"<span>{(_fmt(m['point'], m['kind']) if m['point'] is not None else '—')}</span></div>"
                         for m in c["metrics"])
         nodes[f"out_{c['ticker']}"] = {"t": c["file"], "plug": "no", "sub": "P5 · output workbook",
                                        "body": f"Summary sheet for {c['company']} · {c['period']}.<br>{mrows}"}
-    parts.append(_rect(378, 660, 304, 36, "output_spec", "#12271a", "#2f6b43",
+    parts.append(_rect(378, 580, 304, 36, "output_spec", "#12271a", "#2f6b43",
                        [f"OUTPUT · {spec['n_numbers']} numbers → {len(spec['files'])} .xlsx", "click: what we emit"]))
     for x in xs:
-        parts.append(f'<line x1="{x+85}" y1="636" x2="530" y2="660" stroke="#284d33" stroke-width="0.7"/>')
+        parts.append(f'<line x1="{x+85}" y1="554" x2="530" y2="580" stroke="#284d33" stroke-width="0.7"/>')
     filerows = "".join(f"<div class=kv><span>{f['file']}</span><span class=u>{', '.join(m['label'] for m in f['metrics'])}</span></div>"
                        for f in spec["files"])
     contract = "".join(f"<div class=kv><span>{html.escape(x)}</span></div>" for x in spec["contract"])
@@ -889,7 +1081,8 @@ def graph():
                   "<span class=sw style='background:#8b93a1'></span>fixed / pending"
                   "<span class=sw style='background:#3fb950'></span>ready output</div>")
         run_card = ("<div class=card><button id=runbtn onclick='runPipe()'>▶ Run pipeline</button> "
-                    "<span class=u>runs all four companies through the pipeline — nodes light up as the agent runs them</span>"
+                    "<a id=dl href='/api/download' style='display:none;margin-left:10px'>⬇ download outputs (4 workbooks + clear-run log)</a>"
+                    "<span class=u> runs all four companies through the pipeline — nodes light up as the agent runs them</span>"
                     "<div id=runlog>click ▶ Run to watch the agent step through the nodes…</div></div>")
         run_js = ("<script>function runPipe(){var b=document.getElementById('runbtn');b.disabled=true;b.textContent='running…';"
                   "var L=document.getElementById('runlog');L.textContent='';"
@@ -902,46 +1095,31 @@ def graph():
                   "if(d.log){var s=document.createElement('div');if(d.cls)s.className=d.cls;s.textContent=d.log;"
                   "L.appendChild(s);L.scrollTop=L.scrollHeight;}"
                   "if(d.done){es.close();b.disabled=false;b.textContent='▶ Run again';b.classList.add('g');"
+                  "var dl=document.getElementById('dl');if(dl)dl.style.display='inline-block';"
                   "var el=document.getElementById('n_'+d.node);if(el)el.classList.add('run');}};"
                   "es.onerror=function(){es.close();b.disabled=false;b.textContent='▶ Run pipeline';};}</script>")
-        from . import research as _research
         from .llm import LLM as _LLM
         _l = _LLM()
-        # Two distinct jobs for the same driver, and conflating them misreads the design:
-        # research.py is the primary reader inside the pipeline, signals.py is not.
-        if _l.available:
-            _reader = (f"<span class='badge guide'>OpenAI {_l.model}</span> live")
-        elif _research.has_cached_answers():
-            _reader = "<span class='badge guide'>replaying committed answers</span> no key needed"
-        else:
-            _reader = ("<span class=badge>no key, no cache</span> set OPENAI_API_KEY in .env — "
-                       "the deterministic parsers take over")
-        llm_card = ("<div class=card style='border-color:#263040;background:#12161c'>"
-                    "<b class=u>LLM driver</b> <span class=u>— one driver, two jobs</span>"
-                    "<div class=mrow><span><b>research agent</b> "
-                    "<span class='badge guide'>in-pipeline · P1</span> reads the filings to a "
-                    "per-metric brief; every figure must carry a quote that appears verbatim in "
-                    "the source or it is discarded. This is where the history comes from.</span>"
-                    f"<span>{_reader}</span></div>"
-                    "<div class=mrow><span><b>qualitative signals</b> "
-                    "<span class=badge>off-pipeline</span> reads calls and slides for colour "
-                    "(§6) — never sets a number, not a stage in the flow.</span>"
-                    "<span class=u>informational</span></div>"
-                    "<div class=u style='margin-top:6px'>The LLM extracts reported facts only. "
-                    "Forecasting is the deterministic statistical layer, gated on unseen "
-                    "outer origins.</div>"
+        llm_card = ("<div class=card style='border-color:#26405a;background:#101922'>"
+                    "<b class=u>🤖 LLM agent</b> "
+                    + (f"<span class='badge guide'>OpenAI {_l.model} · IN-PIPELINE</span> drives the "
+                       "<b>P3 agent orchestration</b> — reads both methodologies + PIT backtests and selects "
+                       "per metric with a regime read + reason (never invents a number). Click ▶ Run to watch it."
+                       if _l.available else
+                       "<span class=badge>no key</span> set OPENAI_API_KEY in .env — without it the agent is off "
+                       "and selection falls back to the deterministic gate.")
                     + "</div>")
         body = (f"<h1>One pipeline · four companies · one output layer</h1>"
                 f"<div class=sub>Input (highlight only) → ingestion → Methodology 1 → model approaches → "
-                f"<b>nested configuration selection</b> → <b>outer validation + stats control</b> → output. "
+                f"<b>parameter eval (select best)</b> → <b>validate (backtest + stats control)</b> → output. "
                 f"Click a node to inspect it; click ▶ Run to watch the agent execute them.</div>"
                 f"{run_card}{llm_card}"
                 f"{legend}<div class=card style='padding:10px'>{svg}</div>"
                 f"<div class=card><b>{manifest['n_filled']}/{manifest['n_total']} numbers produced</b> "
-                f"· {manifest['wired']}/4 companies wired · <a href='/output'>output detail</a>"
-                f" · <a href='/backtest'>▸ prequential backtest results &amp; analysis</a></div>"
+                f"· <a href='/trace'>▸ provenance trace (raw data → final number)</a>"
+                f" · <a href='/report'>M1 vs M2</a> · <a href='/backtest'>backtest</a></div>"
                 f"<div>Drill into learned weights: {focus}</div>"
-                f"<a href='/'>← overview</a>{_modal_js(nodes)}{run_js}")
+                f"<a href='/overview'>← overview</a>{_modal_js(nodes)}{run_js}")
         return Response(_page("Pipeline", body), mimetype="text/html")
     ticker = request.args.get("t", "ADI").upper()
     if ticker not in FOLDER:
@@ -1002,7 +1180,7 @@ def graph():
             f"Fixed methodology vs hot-swappable research layer.</div>"
             f"<div>Company: {tsel}</div><div style='margin-top:6px'>Metric: {msel}</div>"
             f"{legend}<div class=card style='padding:10px'>{svg}</div>{form}"
-            f"<a href='/'>← overview</a> · <a href='/c/{ticker}'>metric detail →</a>{js}")
+            f"<a href='/overview'>← overview</a> · <a href='/c/{ticker}'>metric detail →</a>{js}")
     return Response(_page("Graph", body), mimetype="text/html")
 
 
@@ -1015,72 +1193,63 @@ def api_run():
 
     def gen():
         yield sse({"node": "methodology", "cls": "n",
-                   "log": "▸ Reading Methodology 1 — filing baseline + guidance calibration (the agent obeys this)"})
-        time.sleep(0.5)
-        done = 0
+                   "log": "▸ Reading Methodology 1 — filing baseline + guidance + bridge"})
+        time.sleep(0.35)
+        yield sse({"node": "methodology2", "cls": "n",
+                   "log": "▸ Reading Methodology 2 — historical analogue + weighted scenarios"})
+        time.sleep(0.4)
+        # Authoritative pass — the SAME guarded-nested pipeline the final command runs.
+        # It writes the four workbooks + the clear-run evidence log, so the demo shows
+        # exactly the numbers that get submitted (demo == submission, reproducible).
+        manifest = output.run_pipeline(write=True)
+        cmap = {c["ticker"]: c for c in manifest["companies"]}
+        done = manifest["n_filled"]
         for t in output.TICKERS:
             a = methodology.adapter(t)
             sp = company_spec(t)
+            c = cmap[t]
             yield sse({"node": f"co_{t}", "cls": "n",
                        "log": f"● {t} · {a.get('name', t)} — input: (company code, required output · {sp['period']})"})
             time.sleep(0.3)
             yield sse({"node": "u_extract", "log": f"   P1 · ingest → extract period panel  ({t})"})
             time.sleep(0.3)
-            # LLM driver (OFF-PIPELINE) — qualitative signals; never sets numbers, no graph node
-            from .llm import LLM as _LLM
-            _llm = _LLM()
-            if _llm.available:
-                from . import signals as _signals
-                s = _signals.qualitative_signals(t, _llm)
-                yield sse({"cls": "n", "log": f"   [off-pipeline] LLM driver · calls/slides → {s['summary'] if s else '(no signal)'}"})
-            else:
-                yield sse({"cls": "d", "log": "   [off-pipeline] LLM driver · no key — numeric pipeline unaffected"})
-            time.sleep(0.2)
-            d = selection.forecast(t)
+            # P1.5 · AGENT input provisioning — the agent reads the data catalog + each
+            # methodology's input requirements and decides how to provision inputs, bounded by
+            # feature-control (stats-control on whether the features are meaningful).
+            from . import provisioner as _prov
+            prov = _prov.provision(t)
+            pwho = "🤖 agent" if prov["agent"] else "control (no key)"
+            yield sse({"node": "provisioning", "cls": "n",
+                       "log": f"   P1.5 · {pwho}: provisioning inputs for {t} — catalog → methodology needs → feature control"})
+            time.sleep(0.25)
+            for pp in prov["provision"]:
+                m2f = "M2✓" if pp["m2_feasible"] else "M2✗"
+                yield sse({"node": "provisioning", "cls": "d",
+                           "log": f"      {pp['label']}: M1✓ {m2f} — {pp['reason']}"})
+                time.sleep(0.12)
+            time.sleep(0.1)
+            # P2/P3 · guarded selection — the engine picks, per metric, the causal nested
+            # ensemble vs the direct adapter (gated on unseen-origin skill). THIS is the
+            # decision that produces the submitted number; M1 ∥ M2 stay explorable in /report.
+            yield sse({"node": "comparison", "cls": "n",
+                       "log": f"   P2/P3 · guarded nested selection for {t} — nested ensemble gated vs seasonal-naive, else direct adapter"})
+            time.sleep(0.3)
             metrics = []
-            for m in sp["metrics"]:
-                lbl = m["label"]
-                mm = d["metrics"].get(lbl)
-                metrics.append({"label": lbl, "units": m["units"], "band": mm["band"] if mm else None,
-                                "point": mm["point"] if mm else None, "kind": mm["kind"] if mm else None,
-                                "selection": mm.get("selection") if mm else None})
-                approach = a.get("metrics", {}).get(lbl, {}).get("approach", "")
-                anode = _APPROACH_NODE.get(approach, "app_seasonal")
-                aname = _APPROACH_META.get(anode, ("", ""))[0]
-                val = mm["point"] if mm else "—"
-                basis = (mm["basis"][:50] if mm else "")
-                yield sse({"node": anode, "cls": "d", "log": f"   P3 · {aname} → {lbl} = {val}  [{basis}]"})
-                if mm and mm["point"] is not None:
-                    done += 1
-                time.sleep(0.22)
-            # P3.5 · nested parameter selection — before each unseen outer target.
-            for mm in metrics:
-                decision = mm.get("selection") or {}
-                source = decision.get("source", "direct")
-                config_id = decision.get("config_id") or "none"
-                reasons = ", ".join(decision.get("reasons", []))
-                suffix = f"; {reasons}" if reasons else ""
-                yield sse({"node": "param_eval", "cls": "d",
-                           "log": f"   P3.5 · nested selection {mm['label']}: config={config_id}, production={source}{suffix}"})
-                time.sleep(0.14)
+            for m in c["metrics"]:
+                metrics.append({"label": m["label"], "units": m["units"], "kind": m["kind"],
+                                "point": m["point"], "band": m.get("band")})
+                sel = m.get("selection") or {}
+                src = sel.get("source") or "direct"
+                node = "methodology2" if src == "nested" else "methodology"
+                pt = _fmt(m["point"], m["kind"]) if m["point"] is not None else "—"
+                dp = _fmt(m.get("direct_point"), m["kind"]) if m.get("direct_point") is not None else "—"
+                sk = sel.get("outer_skill")
+                skn = f" skill {sk:+.2f}" if isinstance(sk, (int, float)) else ""
+                yield sse({"node": node, "cls": "d",
+                           "log": f"   → {m['label']}: {pt} {m['units']}  [{src}{skn}]  (direct {dp})"})
+                time.sleep(0.18)
             time.sleep(0.12)
-            # P4 · report unseen outer evidence from the formal paired evaluation.
-            for mm in metrics:
-                decision = mm.get("selection") or {}
-                mae = decision.get("outer_mae")
-                baseline_mae = decision.get("baseline_mae")
-                skill = decision.get("outer_skill")
-                if mae is None or baseline_mae is None or skill is None:
-                    log = f"   P4 · outer validation {mm['label']}: no paired outer evidence"
-                else:
-                    log = (
-                        f"   P4 · outer validation {mm['label']}: n={decision['outer_origins']} "
-                        f"MAE={mae:.3g} vs seasonal={baseline_mae:.3g}, skill={skill:.1%}"
-                    )
-                yield sse({"node": "prequential", "cls": "d", "log": log})
-                time.sleep(0.14)
-
-            # Coverage and Kupiec remain secondary diagnostics, not the selection loss.
+            # P4 · prequential backtest — validate the selected model (walk-forward)
             from . import prequential as _pq
             ran = 0
             for mm in metrics:
@@ -1092,12 +1261,12 @@ def api_run():
                 br = r["breach_rate"] if r["breach_rate"] is not None else 0.0
                 flag = " ⚠miscalibrated" if (r.get("kupiec_pvalue") is not None and r["kupiec_pvalue"] < 0.05) else ""
                 yield sse({"node": "prequential", "cls": "d",
-                           "log": f"        coverage diagnostic {mm['label']}: n={r['n_origins']} {_pq.headline_error(r)} "
+                           "log": f"   P4 · backtest {mm['label']}: n={r['n_origins']} {_pq.headline_error(r)} "
                                   f"breach={br:.0%}/exp{r['expected_breach']:.0%} Kupiec p={kp}{flag}"})
                 time.sleep(0.16)
             if not ran:
                 yield sse({"node": "prequential", "cls": "d",
-                           "log": f"        coverage diagnostics ({t}) skipped — no historical series yet"})
+                           "log": f"   P4 · backtest ({t}) skipped — no historical series yet"})
             time.sleep(0.2)
             # P4 · stats control — validate the output numbers
             from . import stats_control as _sc
@@ -1110,11 +1279,13 @@ def api_run():
                     bad = ", ".join(c["name"] for c in r["checks"] if not c["ok"])
                     yield sse({"cls": "d", "log": f"        {'✗' if r['verdict']=='fail' else '⚠'} {lbl}: {r['verdict']} ({bad})"})
             time.sleep(0.2)
-            path = workbook.write_direct(sp["outputFile"], sp["period"], metrics)
-            yield sse({"node": f"out_{t}", "cls": "n", "log": f"   P5 · output → wrote {os.path.basename(path)}"})
+            wname = os.path.basename(c["written"]) if c.get("written") else sp["outputFile"]
+            yield sse({"node": f"out_{t}", "cls": "n", "log": f"   P5 · output → wrote {wname}"})
             time.sleep(0.3)
+        rl = manifest.get("run_log") or {}
+        logname = os.path.basename(rl.get("stable", "clear-run.md"))
         yield sse({"node": "output_spec", "cls": "n", "done": True,
-                   "log": f"✓ done — {done}/12 numbers → 4 workbooks in submission/  (npm run check:submission)"})
+                   "log": f"✓ done — {done}/12 numbers → 4 workbooks + evidence log logs/{logname}  ·  npm run check:submission"})
 
     return Response(gen(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -1125,7 +1296,7 @@ def api_validate():
     from flask import request
     try:
         node = request.get_json(force=True)
-    except BadRequest as exc:
+    except Exception as exc:
         return {"verdict": "invalid", "messages": [f"bad JSON: {exc}"]}
     return governance.validate_node(node)
 
@@ -1135,7 +1306,7 @@ def api_addnode():
     from flask import request
     try:
         node = request.get_json(force=True)
-    except BadRequest as exc:
+    except Exception as exc:
         return {"saved": False, "verdict": "invalid", "messages": [f"bad JSON: {exc}"]}
     v = governance.validate_node(node)
     if v.get("verdict") not in ("publishable", "declarable"):

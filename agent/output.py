@@ -66,8 +66,13 @@ def run_pipeline(write: bool = False, selection_mode: str = selection.GUARDED_NE
     filled = sum(1 for f in companies for m in f["metrics"] if m["point"] is not None)
     total = sum(len(f["metrics"]) for f in companies)
     report_paths = selection.write_nested_report() if write and selection_mode != selection.DIRECT_MODE else None
-    return {"companies": companies, "n_filled": filled, "n_total": total,
-            "selection_mode": selection_mode, "nested_report": report_paths,
-            "wired": sum(1 for f in companies if f["wired"]),
-            "ready": all(f["wired"] and all(m["point"] is not None for m in f["metrics"])
-                         for f in companies)}
+    manifest = {"companies": companies, "n_filled": filled, "n_total": total,
+                "selection_mode": selection_mode, "nested_report": report_paths,
+                "wired": sum(1 for f in companies if f["wired"]),
+                "ready": all(f["wired"] and all(m["point"] is not None for m in f["metrics"])
+                             for f in companies)}
+    if write:
+        # Emit the clear-run evidence log alongside the workbooks (SUBMISSION.md).
+        from . import runlog
+        manifest["run_log"] = runlog.write_log(manifest)
+    return manifest
